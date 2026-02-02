@@ -340,6 +340,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
             
             # Handle chat via MessageBus (Nanobot)
             if action == "chat":
+                log_msg = f"⚡ Processing message with Backend: {settings.agent_backend} (Provider: {settings.llm_provider})"
+                logger.warning(log_msg)  # Use WARNING to ensure it shows up
+                print(log_msg)           # Force stdout just in case
+                
                 # Only if using new backend, but let's default to new backend logic eventually
                 # For Phase 2 transition: We use the Bus!
                 # But allow fallback to old router if 'agent_active' is toggled specifically for old behavior?
