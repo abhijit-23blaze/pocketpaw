@@ -2,6 +2,7 @@
 
 Changes:
   - 2026-02-02: Added Rich logging for beautiful console output.
+  - 2026-02-03: Handle port-in-use gracefully with automatic port finding.
 """
 
 import argparse
@@ -20,29 +21,37 @@ logger = logging.getLogger(__name__)
 
 async def run_telegram_mode(settings: Settings) -> None:
     """Run in Telegram bot mode."""
-    from pocketclaw.web_server import run_pairing_server
+    from pocketclaw.web_server import run_pairing_server, find_available_port
     from pocketclaw.bot_gateway import run_bot
-    
+
     # Check if we need to run pairing flow
     if not settings.telegram_bot_token or not settings.allowed_user_id:
         logger.info("🔧 First-time setup: Starting pairing server...")
+
+        # Find available port before showing instructions
+        try:
+            port = find_available_port(settings.web_port)
+        except OSError:
+            logger.error("❌ Could not find an available port. Please close other applications and try again.")
+            return
+
         print("\n" + "="*50)
-        print("🦀 POCKETCLAW SETUP")
+        print("🐾 POCKETPAW SETUP")
         print("="*50)
         print("\n1. Create a Telegram bot via @BotFather")
         print("2. Copy the bot token")
-        print("3. Open http://localhost:8888 in your browser")
+        print(f"3. Open http://localhost:{port} in your browser")
         print("4. Paste the token and scan the QR code\n")
-        
-        # Open browser automatically
-        webbrowser.open("http://localhost:8888")
-        
+
+        # Open browser automatically with correct port
+        webbrowser.open(f"http://localhost:{port}")
+
         # Run pairing server (blocks until pairing complete)
         await run_pairing_server(settings)
-        
+
         # Reload settings after pairing
         settings = get_settings(force_reload=True)
-    
+
     # Start the bot
     logger.info("🚀 Starting PocketPaw bot...")
     await run_bot(settings)
@@ -88,7 +97,7 @@ Examples:
     parser.add_argument(
         "--version", "-v",
         action="version",
-        version="%(prog)s 0.1.0"
+        version="%(prog)s 0.2.0"
     )
 
     args = parser.parse_args()

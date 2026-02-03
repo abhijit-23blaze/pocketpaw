@@ -2,10 +2,12 @@
 
 Changes:
   - 2026-02-03: Optimised deep link flow. Now fetches bot username and listens for /start <secret>.
+  - 2026-02-03: Added automatic port finding when default port is busy.
 """
 
 import asyncio
 import secrets
+import socket
 from typing import Optional
 import logging
 
@@ -22,6 +24,22 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 from pocketclaw.config import Settings
+
+
+def find_available_port(start_port: int, max_attempts: int = 10) -> int:
+    """Find an available port starting from start_port.
+
+    Tries start_port first, then increments until finding an available one.
+    """
+    for offset in range(max_attempts):
+        port = start_port + offset
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(('127.0.0.1', port))
+                return port
+        except OSError:
+            continue
+    raise OSError(f"Could not find available port in range {start_port}-{start_port + max_attempts}")
 
 logger = logging.getLogger(__name__)
 
@@ -376,14 +394,27 @@ def create_app(settings: Settings) -> FastAPI:
     return app
 
 
-async def run_pairing_server(settings: Settings) -> None:
-    """Run the pairing server until pairing is complete."""
+async def run_pairing_server(settings: Settings) -> int:
+    """Run the pairing server until pairing is complete.
+
+    Returns the port that was used (may differ from settings if port was busy).
+    """
     app = create_app(settings)
-    
+
+    # Find available port (handles "address already in use" error)
+    try:
+        port = find_available_port(settings.web_port)
+    except OSError as e:
+        logger.error(f"Could not find available port: {e}")
+        raise
+
+    if port != settings.web_port:
+        logger.info(f"Port {settings.web_port} busy, using port {port} instead")
+
     config = uvicorn.Config(
         app,
         host=settings.web_host,
-        port=settings.web_port,
+        port=port,
         log_level="warning"
     )
     server = uvicorn.Server(config)
@@ -407,7 +438,9 @@ async def run_pairing_server(settings: Settings) -> None:
             if _temp_bot_app.running:
                 await _temp_bot_app.stop()
             await _temp_bot_app.shutdown()
-            
+
         # Shutdown web server
         server.should_exit = True
         await server_task
+
+    return port

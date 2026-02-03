@@ -7,6 +7,12 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![Downloads](https://img.shields.io/pypi/dm/pocketpaw.svg)](https://pypi.org/project/pocketpaw/)
 
+```bash
+pip install pocketpaw && pocketpaw
+```
+
+**That's it.** One command. 30 seconds. Your own AI agent.
+
 I'm your self-hosted, cross-platform personal AI agent. You talk to me through **Telegram**, and I do the work on your computer. Unlike those fancy cloud AIs, I run on _your_ machine, respect _your_ privacy, and I'm always here - even on that dusty laptop in your closet.
 
 **No subscription. No cloud lock-in. Just you and me.**
