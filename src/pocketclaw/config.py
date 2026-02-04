@@ -61,6 +61,16 @@ class Settings(BaseSettings):
     anthropic_api_key: Optional[str] = Field(default=None, description="Anthropic API key")
     anthropic_model: str = Field(default="claude-sonnet-4-5-20250929", description="Anthropic model to use")
     
+    # Memory Backend
+    memory_backend: str = Field(
+        default="file",
+        description="Memory backend: 'file' (simple markdown), 'mem0' (semantic with LLM)"
+    )
+    memory_use_inference: bool = Field(
+        default=True,
+        description="Use LLM to extract facts from memories (only for mem0 backend)"
+    )
+
     # Security
     bypass_permissions: bool = Field(default=False, description="Skip permission prompts for agent actions (use with caution)")
     file_jail_path: Path = Field(default_factory=Path.home, description="Root path for file operations")
@@ -88,6 +98,8 @@ class Settings(BaseSettings):
             "telegram_bot_token": self.telegram_bot_token or existing.get("telegram_bot_token"),
             "allowed_user_id": self.allowed_user_id or existing.get("allowed_user_id"),
             "agent_backend": self.agent_backend,
+            "memory_backend": self.memory_backend,
+            "memory_use_inference": self.memory_use_inference,
             "llm_provider": self.llm_provider,
             "ollama_host": self.ollama_host,
             "ollama_model": self.ollama_model,

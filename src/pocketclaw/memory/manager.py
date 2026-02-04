@@ -1,13 +1,52 @@
 # Memory manager - high-level interface for memory operations.
 # Created: 2026-02-02
+# Updated: 2026-02-04 - Added Mem0 backend support
 # Part of Nanobot Pattern Adoption - Memory System
 
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from pocketclaw.memory.protocol import MemoryStoreProtocol, MemoryEntry, MemoryType
 from pocketclaw.memory.file_store import FileMemoryStore
+
+logger = logging.getLogger(__name__)
+
+
+def create_memory_store(
+    backend: str = "file",
+    base_path: Path | None = None,
+    user_id: str = "default",
+    use_inference: bool = True,
+) -> MemoryStoreProtocol:
+    """
+    Factory function to create the appropriate memory store.
+
+    Args:
+        backend: Backend type - 'file' or 'mem0'
+        base_path: Base path for storage
+        user_id: User ID for mem0 scoping
+        use_inference: Whether to use LLM inference (mem0 only)
+
+    Returns:
+        MemoryStoreProtocol implementation
+    """
+    if backend == "mem0":
+        try:
+            from pocketclaw.memory.mem0_store import Mem0MemoryStore
+            logger.info("Using Mem0 memory backend (semantic search enabled)")
+            return Mem0MemoryStore(
+                user_id=user_id,
+                data_path=base_path,
+                use_inference=use_inference,
+            )
+        except ImportError:
+            logger.warning("mem0ai not installed, falling back to file backend")
+            return FileMemoryStore(base_path)
+    else:
+        logger.info("Using file-based memory backend")
+        return FileMemoryStore(base_path)
 
 
 class MemoryManager:
@@ -30,15 +69,33 @@ class MemoryManager:
         context = await memory.get_context_for_agent()
     """
 
-    def __init__(self, store: MemoryStoreProtocol | None = None, base_path: Path | None = None):
+    def __init__(
+        self,
+        store: MemoryStoreProtocol | None = None,
+        base_path: Path | None = None,
+        backend: str = "file",
+        user_id: str = "default",
+        use_inference: bool = True,
+    ):
         """
         Initialize memory manager.
 
         Args:
-            store: Custom store implementation. If None, uses FileMemoryStore.
-            base_path: Base path for file storage. Only used if store is None.
+            store: Custom store implementation. If None, creates based on backend.
+            base_path: Base path for storage.
+            backend: Backend type - 'file' or 'mem0'.
+            user_id: User ID for mem0 scoping.
+            use_inference: Whether to use LLM inference (mem0 only).
         """
-        self._store = store or FileMemoryStore(base_path)
+        if store:
+            self._store = store
+        else:
+            self._store = create_memory_store(
+                backend=backend,
+                base_path=base_path,
+                user_id=user_id,
+                use_inference=use_inference,
+            )
 
     # =========================================================================
     # High-Level Operations
@@ -187,9 +244,27 @@ class MemoryManager:
 _manager: MemoryManager | None = None
 
 
-def get_memory_manager() -> MemoryManager:
-    """Get the global memory manager instance."""
+def get_memory_manager(force_reload: bool = False) -> MemoryManager:
+    """
+    Get the global memory manager instance.
+
+    Uses configuration from Settings to determine backend.
+
+    Args:
+        force_reload: Force recreation of the manager.
+
+    Returns:
+        MemoryManager instance
+    """
     global _manager
-    if _manager is None:
-        _manager = MemoryManager()
+
+    if _manager is None or force_reload:
+        from pocketclaw.config import get_settings
+
+        settings = get_settings()
+        _manager = MemoryManager(
+            backend=settings.memory_backend,
+            use_inference=settings.memory_use_inference,
+        )
+
     return _manager
