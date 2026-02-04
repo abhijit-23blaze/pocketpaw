@@ -72,8 +72,10 @@ function app() {
         identityData: {},
         
         showMemory: false,
-        memoryTab: 'session',
-        sessionMemory: [],
+        memoryTab: 'sessions',  // 'sessions', 'long_term'
+        sessionsList: [],       // List of all sessions
+        sessionMemory: [],      // Current session history
+        selectedSession: null,  // Currently selected session ID
         longTermMemory: [],
         memoryLoading: false,
         memorySearch: '',
@@ -1085,17 +1087,33 @@ function app() {
         openMemory() {
             this.showMemory = true;
             this.memoryLoading = true;
-            this.loadSessionMemory();
+            this.loadSessionsList();
             this.loadLongTermMemory();
         },
 
-        loadSessionMemory() {
-            if (!this.sessionId) return;
-            fetch(`/api/memory/session?id=${this.sessionId}`)
+        loadSessionsList() {
+            fetch('/api/memory/sessions')
+                .then(r => r.json())
+                .then(data => {
+                    this.sessionsList = data;
+                    this.updateMemoryStats();
+
+                    // Auto-select current session if in list
+                    if (this.sessionId && data.some(s => s.id === this.sessionId)) {
+                        this.selectSession(this.sessionId);
+                    }
+                })
+                .catch(e => {
+                    console.error('Failed to load sessions:', e);
+                });
+        },
+
+        selectSession(sessionId) {
+            this.selectedSession = sessionId;
+            fetch(`/api/memory/session?id=${sessionId}`)
                 .then(r => r.json())
                 .then(data => {
                     this.sessionMemory = data;
-                    this.updateMemoryStats();
                 });
         },
 
@@ -1114,10 +1132,11 @@ function app() {
         },
 
         updateMemoryStats() {
+            const totalSessionMessages = this.sessionsList.reduce((sum, s) => sum + (s.message_count || 0), 0);
             this.memoryStats = {
-                total_memories: this.longTermMemory.length + this.sessionMemory.length,
-                active_context: this.sessionMemory.length,
-                archived: 0,  // Could track archived memories separately
+                total_memories: this.longTermMemory.length + totalSessionMessages,
+                active_sessions: this.sessionsList.length,
+                long_term_facts: this.longTermMemory.length,
                 user_interactions: this.sessionMemory.filter(m => m.role === 'user').length
             };
         },

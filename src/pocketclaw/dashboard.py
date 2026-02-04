@@ -758,6 +758,43 @@ async def get_identity():
     }
 
 
+@app.get("/api/memory/sessions")
+async def list_sessions(limit: int = 20):
+    """List all available sessions with metadata."""
+    from pathlib import Path
+    import json
+
+    sessions_path = Path.home() / ".pocketclaw" / "memory" / "sessions"
+
+    if not sessions_path.exists():
+        return []
+
+    sessions = []
+    for session_file in sorted(sessions_path.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        if len(sessions) >= limit:
+            break
+
+        try:
+            data = json.loads(session_file.read_text())
+            if data:
+                # Get first and last message for preview
+                first_msg = data[0] if data else {}
+                last_msg = data[-1] if data else {}
+
+                sessions.append({
+                    "id": session_file.stem,  # Remove .json extension
+                    "message_count": len(data),
+                    "first_message": first_msg.get("content", "")[:100],
+                    "last_message": last_msg.get("content", "")[:100],
+                    "updated_at": last_msg.get("timestamp", ""),
+                    "created_at": first_msg.get("timestamp", ""),
+                })
+        except (json.JSONDecodeError, KeyError):
+            continue
+
+    return sessions
+
+
 @app.get("/api/memory/session")
 async def get_session_memory(id: str = "", limit: int = 50):
     """Get session memory."""
