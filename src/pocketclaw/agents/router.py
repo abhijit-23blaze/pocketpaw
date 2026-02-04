@@ -66,9 +66,16 @@ class AgentRouter:
             self._agent = ClaudeAgentSDKWrapper(self.settings)
     
     async def run(self, message: str) -> AsyncIterator[dict]:
-        """Run the agent with the given message."""
+        """Run the agent with the given message.
+        
+        Yields dicts with:
+          - type: "message", "tool_use", "tool_result", "error", "done"
+          - content: string content
+          - metadata: optional dict with tool info (name, input)
+        """
         if not self._agent:
-            yield {"type": "message", "content": "❌ No agent initialized"}
+            yield {"type": "error", "content": "❌ No agent initialized"}
+            yield {"type": "done", "content": ""}
             return
         
         async for chunk in self._agent.run(message):

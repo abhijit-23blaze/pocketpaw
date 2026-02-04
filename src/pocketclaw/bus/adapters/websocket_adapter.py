@@ -1,17 +1,18 @@
 """
 WebSocket channel adapter.
 Created: 2026-02-02
+Changes:
+  - 2026-02-05: Fixed system_event format - send flat structure for frontend
 """
 
-from fastapi import WebSocket
-from typing import Any
-import json
 import logging
+from typing import Any
+
+from fastapi import WebSocket
 
 from pocketclaw.bus.adapters import BaseChannelAdapter
 from pocketclaw.bus.events import Channel, InboundMessage, OutboundMessage, SystemEvent
 from pocketclaw.bus.queue import MessageBus
-from dataclasses import asdict
 
 logger = logging.getLogger(__name__)
 
@@ -40,13 +41,16 @@ class WebSocketAdapter(BaseChannelAdapter):
 
     async def on_system_event(self, event: SystemEvent) -> None:
         """Handle system event by broadcasting to all clients."""
-        # Convert dataclass to dict
-        event_dict = asdict(event)
-        
+        # Send flat structure: {type, event_type, data}
+        # Frontend expects event_type and data at top level
+        payload = {"type": "system_event", "event_type": event.event_type, "data": event.data}
+
         # Broadcast to all connected clients
-        # In multi-user system, we'd filter by session_key/chat_id if available in data
-        # For now, broadcast to all (dashboard is single view)
-        await self.broadcast(event_dict, msg_type="system_event")
+        for ws in self._connections.values():
+            try:
+                await ws.send_json(payload)
+            except Exception:
+                pass
 
     async def register_connection(self, websocket: WebSocket, chat_id: str) -> None:
         """Register a new WebSocket connection."""
@@ -72,7 +76,6 @@ class WebSocketAdapter(BaseChannelAdapter):
                 metadata=data,
             )
 
-            
             # Send stream_start to frontend to initialize the response UI
             ws = self._connections.get(chat_id)
             if ws:
@@ -80,7 +83,7 @@ class WebSocketAdapter(BaseChannelAdapter):
                     await ws.send_json({"type": "stream_start"})
                 except Exception:
                     pass
-            
+
             await self._publish_inbound(message)
         # Other actions (settings, tools) handled separately
 
@@ -97,24 +100,25 @@ class WebSocketAdapter(BaseChannelAdapter):
     async def _send_to_socket(self, ws: WebSocket, message: OutboundMessage) -> None:
         """Send to a specific WebSocket."""
         try:
-
             if message.is_stream_end:
                 await ws.send_json({"type": "stream_end"})
                 return
 
             # Legacy frontend expects 'message' for chunks too
-            msg_type = "message" 
-            
-            # If it's the very first chunk, we might want to send stream_start? 
-            # But we don't track state easily here. 
+            msg_type = "message"
+
+            # If it's the very first chunk, we might want to send stream_start?
+            # But we don't track state easily here.
             # Let's hope frontend doesn't strictly need stream_start if it's already waiting.
             # (Legacy dashboard.py sent stream_start before headers)
-            
-            await ws.send_json({
-                "type": msg_type,
-                "content": message.content,
-                "metadata": message.metadata,
-            })
+
+            await ws.send_json(
+                {
+                    "type": msg_type,
+                    "content": message.content,
+                    "metadata": message.metadata,
+                }
+            )
         except Exception:
             pass  # Connection closed
 

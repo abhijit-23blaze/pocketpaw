@@ -1,6 +1,7 @@
 """Open Interpreter agent wrapper.
 
 Changes:
+  2026-02-05 - Emit tool_use/tool_result events for Activity panel
   2026-02-04 - Filter out verbose console output, only show messages and final results
   2026-02-02 - Added executor layer logging for architecture visibility.
 """
@@ -131,23 +132,43 @@ class OpenInterpreterAgent:
                         is_start = chunk.get("start", False)
                         is_end = chunk.get("end", False)
 
-                        # Handle computer/console chunks - show progress indicators
+                        # Handle computer/console chunks - emit tool events for Activity
                         if chunk_role == "computer":
                             if chunk_type == "console":
                                 if is_start and current_language and not shown_running:
-                                    # Show "Running X..." indicator
+                                    # Emit tool_use event for Activity panel
                                     lang_display = current_language.title()
                                     asyncio.run_coroutine_threadsafe(
                                         chunk_queue.put(
                                             {
-                                                "type": "message",
-                                                "content": f"\n⚡ *Running {lang_display}...*\n",
+                                                "type": "tool_use",
+                                                "content": f"Running {lang_display}...",
+                                                "metadata": {
+                                                    "name": f"run_{current_language}",
+                                                    "input": {},
+                                                },
                                             }
                                         ),
                                         loop,
                                     )
                                     shown_running = True
                                 elif is_end:
+                                    # Emit tool_result event for Activity panel
+                                    lang_display = (
+                                        current_language.title() if current_language else "Code"
+                                    )
+                                    asyncio.run_coroutine_threadsafe(
+                                        chunk_queue.put(
+                                            {
+                                                "type": "tool_result",
+                                                "content": f"{lang_display} execution completed",
+                                                "metadata": {
+                                                    "name": f"run_{current_language or 'code'}"
+                                                },
+                                            }
+                                        ),
+                                        loop,
+                                    )
                                     # Reset for next code block
                                     shown_running = False
                                 # Skip verbose active_line, intermediate output

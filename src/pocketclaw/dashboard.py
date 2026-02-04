@@ -524,7 +524,8 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = Query(Non
                     settings.bypass_permissions = bool(data.get("bypass_permissions"))
                 settings.save()
 
-                # Update Loop settings if needed (it reloads on each message via get_settings inside loop currently)
+                # Reset the agent loop's router to pick up new settings
+                agent_loop.reset_router()
 
                 await websocket.send_json({"type": "message", "content": "⚙️ Settings updated"})
 

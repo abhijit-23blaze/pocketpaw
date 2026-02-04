@@ -380,14 +380,14 @@ class ClaudeAgentSDK:
                     if text:
                         yield AgentEvent(type="message", content=text)
 
-                    # Log tool uses
+                    # Emit tool_use events with proper metadata
                     tools = self._extract_tool_info(event)
                     for tool in tools:
                         logger.info(f"🔧 Tool: {tool['name']}")
                         yield AgentEvent(
                             type="tool_use",
                             content=f"Using {tool['name']}...",
-                            metadata=tool
+                            metadata={"name": tool['name'], "input": tool['input']}
                         )
                     continue
 

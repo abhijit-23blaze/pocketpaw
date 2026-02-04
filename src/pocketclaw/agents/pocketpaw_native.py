@@ -567,21 +567,21 @@ class PocketPawOrchestrator:
                         tool_input = block.input
                         tool_id = block.id
 
-                        # Notify user
+                        # Emit tool_use event
                         yield AgentEvent(
                             type="tool_use",
                             content=f"🔧 Using {tool_name}...",
-                            metadata={"tool": tool_name, "input": tool_input}
+                            metadata={"name": tool_name, "input": tool_input}
                         )
 
                         # Execute
                         result = await self._execute_tool(tool_name, tool_input)
 
-                        # Yield result to user
+                        # Emit tool_result event
                         yield AgentEvent(
                             type="tool_result",
                             content=result[:500] + ("..." if len(result) > 500 else ""),
-                            metadata={"tool": tool_name}
+                            metadata={"name": tool_name}
                         )
 
                         assistant_content.append(block)
