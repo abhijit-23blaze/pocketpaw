@@ -5,7 +5,7 @@
 <h1 align="center">PocketPaw</h1>
 
 <p align="center">
-  <strong>Your AI agent that lives on YOUR laptop, not some corporate datacenter.</strong>
+  <strong>Your AI agent that lives on YOUR Computer, Mobile, works on your goals autonomously.</strong>
 </p>
 
 <p align="center">
