@@ -418,6 +418,101 @@ async def toggle_channel(request: Request):
     }
 
 
+# OAuth scopes per service
+_OAUTH_SCOPES: dict[str, list[str]] = {
+    "google_gmail": [
+        "https://mail.google.com/",
+    ],
+    "google_calendar": [
+        "https://www.googleapis.com/auth/calendar",
+    ],
+}
+
+
+@app.get("/api/oauth/authorize")
+async def oauth_authorize(service: str = Query("google_gmail")):
+    """Start OAuth flow — redirects user to Google's consent screen."""
+    from fastapi.responses import RedirectResponse
+
+    settings = Settings.load()
+    client_id = settings.google_oauth_client_id
+    if not client_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Google OAuth Client ID not configured. Set it in Settings first.",
+        )
+
+    scopes = _OAUTH_SCOPES.get(service)
+    if not scopes:
+        raise HTTPException(status_code=400, detail=f"Unknown service: {service}")
+
+    from pocketclaw.integrations.oauth import OAuthManager
+
+    manager = OAuthManager()
+    redirect_uri = f"http://localhost:{settings.web_port}/oauth/callback"
+    state = f"google:{service}"
+
+    auth_url = manager.get_auth_url(
+        provider="google",
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        scopes=scopes,
+        state=state,
+    )
+    return RedirectResponse(auth_url)
+
+
+@app.get("/oauth/callback")
+async def oauth_callback(
+    code: str = Query(""),
+    state: str = Query(""),
+    error: str = Query(""),
+):
+    """OAuth callback route — exchanges auth code for tokens."""
+    from fastapi.responses import HTMLResponse
+
+    if error:
+        return HTMLResponse(f"<h2>OAuth Error</h2><p>{error}</p><p>You can close this window.</p>")
+
+    if not code:
+        return HTMLResponse("<h2>Missing authorization code</h2>")
+
+    try:
+        from pocketclaw.integrations.oauth import OAuthManager
+        from pocketclaw.integrations.token_store import TokenStore
+
+        settings = Settings.load()
+        manager = OAuthManager(TokenStore())
+
+        # State encodes: "{provider}:{service}" e.g. "google:google_gmail"
+        parts = state.split(":", 1)
+        provider = parts[0] if parts else "google"
+        service = parts[1] if len(parts) > 1 else "google_gmail"
+
+        redirect_uri = f"http://localhost:{settings.web_port}/oauth/callback"
+
+        scopes = _OAUTH_SCOPES.get(service, [])
+
+        await manager.exchange_code(
+            provider=provider,
+            service=service,
+            code=code,
+            client_id=settings.google_oauth_client_id or "",
+            client_secret=settings.google_oauth_client_secret or "",
+            redirect_uri=redirect_uri,
+            scopes=scopes,
+        )
+
+        return HTMLResponse(
+            "<h2>Authorization Successful</h2>"
+            "<p>Tokens saved. You can close this window and return to PocketPaw.</p>"
+        )
+
+    except Exception as e:
+        logger.error("OAuth callback error: %s", e)
+        return HTMLResponse(f"<h2>OAuth Error</h2><p>{e}</p>")
+
+
 @app.get("/")
 async def index(request: Request):
     """Serve the main dashboard page."""
@@ -465,7 +560,14 @@ async def verify_token(
 async def auth_middleware(request: Request, call_next):
     # Exempt routes
     # Allow getting QR code to login; allow WhatsApp webhook (Meta verification)
-    exempt_paths = ["/static", "/favicon.ico", "/api/qr", "/webhook/whatsapp", "/api/whatsapp/qr"]
+    exempt_paths = [
+        "/static",
+        "/favicon.ico",
+        "/api/qr",
+        "/webhook/whatsapp",
+        "/api/whatsapp/qr",
+        "/oauth/callback",
+    ]
 
     # Simple check for static
     for path in exempt_paths:
@@ -813,6 +915,40 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = Query(Non
                     settings.anthropic_model = data.get("anthropic_model")
                 if "bypass_permissions" in data:
                     settings.bypass_permissions = bool(data.get("bypass_permissions"))
+                if data.get("web_search_provider"):
+                    settings.web_search_provider = data["web_search_provider"]
+                if data.get("url_extract_provider"):
+                    settings.url_extract_provider = data["url_extract_provider"]
+                if "injection_scan_enabled" in data:
+                    settings.injection_scan_enabled = bool(data["injection_scan_enabled"])
+                if "injection_scan_llm" in data:
+                    settings.injection_scan_llm = bool(data["injection_scan_llm"])
+                if data.get("tool_profile"):
+                    settings.tool_profile = data["tool_profile"]
+                if "plan_mode" in data:
+                    settings.plan_mode = bool(data["plan_mode"])
+                if "plan_mode_tools" in data:
+                    raw = data["plan_mode_tools"]
+                    if isinstance(raw, str):
+                        settings.plan_mode_tools = [t.strip() for t in raw.split(",") if t.strip()]
+                    elif isinstance(raw, list):
+                        settings.plan_mode_tools = raw
+                if "smart_routing_enabled" in data:
+                    settings.smart_routing_enabled = bool(data["smart_routing_enabled"])
+                if data.get("model_tier_simple"):
+                    settings.model_tier_simple = data["model_tier_simple"]
+                if data.get("model_tier_moderate"):
+                    settings.model_tier_moderate = data["model_tier_moderate"]
+                if data.get("model_tier_complex"):
+                    settings.model_tier_complex = data["model_tier_complex"]
+                if data.get("tts_provider"):
+                    settings.tts_provider = data["tts_provider"]
+                if "tts_voice" in data:
+                    settings.tts_voice = data["tts_voice"]
+                if "self_audit_enabled" in data:
+                    settings.self_audit_enabled = bool(data["self_audit_enabled"])
+                if data.get("self_audit_schedule"):
+                    settings.self_audit_schedule = data["self_audit_schedule"]
                 settings.save()
 
                 # Reset the agent loop's router to pick up new settings
@@ -841,6 +977,45 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = Query(Non
                     await websocket.send_json(
                         {"type": "message", "content": "✅ OpenAI API key saved!"}
                     )
+                elif provider == "tavily" and key:
+                    settings.tavily_api_key = key
+                    settings.save()
+                    await websocket.send_json(
+                        {"type": "message", "content": "✅ Tavily API key saved!"}
+                    )
+                elif provider == "brave" and key:
+                    settings.brave_search_api_key = key
+                    settings.save()
+                    await websocket.send_json(
+                        {"type": "message", "content": "✅ Brave Search API key saved!"}
+                    )
+                elif provider == "parallel" and key:
+                    settings.parallel_api_key = key
+                    settings.save()
+                    await websocket.send_json(
+                        {"type": "message", "content": "✅ Parallel AI API key saved!"}
+                    )
+                elif provider == "elevenlabs" and key:
+                    settings.elevenlabs_api_key = key
+                    settings.save()
+                    await websocket.send_json(
+                        {"type": "message", "content": "✅ ElevenLabs API key saved!"}
+                    )
+                elif provider == "google_oauth_id" and key:
+                    settings.google_oauth_client_id = key
+                    settings.save()
+                    await websocket.send_json(
+                        {"type": "message", "content": "✅ Google OAuth Client ID saved!"}
+                    )
+                elif provider == "google_oauth_secret" and key:
+                    settings.google_oauth_client_secret = key
+                    settings.save()
+                    await websocket.send_json(
+                        {
+                            "type": "message",
+                            "content": "✅ Google OAuth Client Secret saved!",
+                        }
+                    )
                 else:
                     await websocket.send_json(
                         {"type": "error", "content": "Invalid API key or provider"}
@@ -866,6 +1041,27 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = Query(Non
                             "bypassPermissions": settings.bypass_permissions,
                             "hasAnthropicKey": bool(settings.anthropic_api_key),
                             "hasOpenaiKey": bool(settings.openai_api_key),
+                            "webSearchProvider": settings.web_search_provider,
+                            "urlExtractProvider": settings.url_extract_provider,
+                            "hasTavilyKey": bool(settings.tavily_api_key),
+                            "hasBraveKey": bool(settings.brave_search_api_key),
+                            "hasParallelKey": bool(settings.parallel_api_key),
+                            "injectionScanEnabled": settings.injection_scan_enabled,
+                            "injectionScanLlm": settings.injection_scan_llm,
+                            "toolProfile": settings.tool_profile,
+                            "planMode": settings.plan_mode,
+                            "planModeTools": ",".join(settings.plan_mode_tools),
+                            "smartRoutingEnabled": settings.smart_routing_enabled,
+                            "modelTierSimple": settings.model_tier_simple,
+                            "modelTierModerate": settings.model_tier_moderate,
+                            "modelTierComplex": settings.model_tier_complex,
+                            "ttsProvider": settings.tts_provider,
+                            "ttsVoice": settings.tts_voice,
+                            "selfAuditEnabled": settings.self_audit_enabled,
+                            "selfAuditSchedule": settings.self_audit_schedule,
+                            "hasElevenlabsKey": bool(settings.elevenlabs_api_key),
+                            "hasGoogleOAuthId": bool(settings.google_oauth_client_id),
+                            "hasGoogleOAuthSecret": bool(settings.google_oauth_client_secret),
                             "agentActive": agent_active,
                             "agentStatus": agent_status,
                         },
@@ -980,6 +1176,34 @@ async def websocket_endpoint(websocket: WebSocket, token: str | None = Query(Non
                     asyncio.create_task(daemon.run_intention_now(intention_id))
                 else:
                     await websocket.send_json({"type": "error", "content": "Intention not found"})
+
+            # ==================== Plan Mode API ====================
+
+            elif action == "approve_plan":
+                from pocketclaw.agents.plan_mode import get_plan_manager
+
+                pm = get_plan_manager()
+                session_key = data.get("session_key", "")
+                plan = pm.approve_plan(session_key)
+                if plan:
+                    await websocket.send_json({"type": "plan_approved", "session_key": session_key})
+                else:
+                    await websocket.send_json(
+                        {"type": "error", "content": "No active plan to approve"}
+                    )
+
+            elif action == "reject_plan":
+                from pocketclaw.agents.plan_mode import get_plan_manager
+
+                pm = get_plan_manager()
+                session_key = data.get("session_key", "")
+                plan = pm.reject_plan(session_key)
+                if plan:
+                    await websocket.send_json({"type": "plan_rejected", "session_key": session_key})
+                else:
+                    await websocket.send_json(
+                        {"type": "error", "content": "No active plan to reject"}
+                    )
 
             # ==================== Skills API ====================
 

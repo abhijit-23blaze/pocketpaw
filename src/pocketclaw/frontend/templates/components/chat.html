@@ -32,8 +32,14 @@
 
     <!-- Streaming indicator -->
     <div class="flex flex-col gap-1.5 max-w-[85%] md:max-w-[70%] self-start items-start" x-show="isStreaming">
-    <div class="px-4 py-3 md:px-5 md:py-3.5 rounded-2xl text-[14px] md:text-[15px] leading-relaxed shadow-sm relative bg-[var(--card-bg)] border border-[var(--glass-border)] rounded-bl-sm">
-        <span x-text="streamingContent"></span>
+    <div class="px-4 py-3 md:px-5 md:py-3.5 rounded-2xl text-[14px] md:text-[15px] leading-relaxed shadow-sm relative bg-[var(--card-bg)] border border-[var(--glass-border)] rounded-bl-sm message-content-wrapper">
+        <span x-show="streamingContent" x-html="formatMessage(streamingContent)"></span>
+        <span x-show="!streamingContent && isThinking" class="text-white/40 italic">
+            Thinking<span class="animate-pulse">...</span>
+        </span>
+        <span x-show="!streamingContent && !isThinking" class="text-white/40">
+            Preparing response...
+        </span>
         <span class="animate-pulse font-bold">▌</span>
     </div>
     <div class="flex gap-2 items-center px-1 opacity-70">

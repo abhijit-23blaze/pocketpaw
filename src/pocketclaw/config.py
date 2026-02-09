@@ -72,6 +72,20 @@ class Settings(BaseSettings):
         default=True, description="Use LLM to extract facts from memories (only for mem0 backend)"
     )
 
+    # Session History Compaction
+    compaction_recent_window: int = Field(
+        default=10, description="Number of recent messages to keep verbatim"
+    )
+    compaction_char_budget: int = Field(
+        default=8000, description="Max total chars for compacted history"
+    )
+    compaction_summary_chars: int = Field(
+        default=150, description="Max chars per older message one-liner extract"
+    )
+    compaction_llm_summarize: bool = Field(
+        default=False, description="Use Haiku to summarize older messages (opt-in)"
+    )
+
     # Tool Policy
     tool_profile: str = Field(
         default="full", description="Tool profile: 'minimal', 'coding', or 'full'"
@@ -125,12 +139,84 @@ class Settings(BaseSettings):
         default_factory=list, description="WhatsApp phone numbers allowed to use the bot"
     )
 
+    # Web Search
+    web_search_provider: str = Field(
+        default="tavily", description="Web search provider: 'tavily' or 'brave'"
+    )
+    tavily_api_key: str | None = Field(default=None, description="Tavily search API key")
+    brave_search_api_key: str | None = Field(default=None, description="Brave Search API key")
+    parallel_api_key: str | None = Field(default=None, description="Parallel AI API key")
+    url_extract_provider: str = Field(
+        default="auto", description="URL extract provider: 'auto', 'parallel', or 'local'"
+    )
+
+    # Image Generation
+    google_api_key: str | None = Field(default=None, description="Google API key (for Gemini)")
+    image_model: str = Field(
+        default="gemini-2.0-flash-exp", description="Google image generation model"
+    )
+
     # Security
     bypass_permissions: bool = Field(
         default=False, description="Skip permission prompts for agent actions (use with caution)"
     )
     file_jail_path: Path = Field(
         default_factory=Path.home, description="Root path for file operations"
+    )
+    injection_scan_enabled: bool = Field(
+        default=True, description="Enable prompt injection scanning on inbound messages"
+    )
+    injection_scan_llm: bool = Field(
+        default=False, description="Use LLM deep scan for suspicious content (requires API key)"
+    )
+    injection_scan_llm_model: str = Field(
+        default="claude-haiku-4-5-20251001",
+        description="Model for LLM-based injection deep scan",
+    )
+
+    # Smart Model Routing
+    smart_routing_enabled: bool = Field(
+        default=False, description="Enable automatic model selection based on task complexity"
+    )
+    model_tier_simple: str = Field(
+        default="claude-haiku-4-5-20251001", description="Model for simple tasks (greetings, facts)"
+    )
+    model_tier_moderate: str = Field(
+        default="claude-sonnet-4-5-20250929",
+        description="Model for moderate tasks (coding, analysis)",
+    )
+    model_tier_complex: str = Field(
+        default="claude-opus-4-6", description="Model for complex tasks (planning, debugging)"
+    )
+
+    # Plan Mode
+    plan_mode: bool = Field(default=False, description="Require approval before executing tools")
+    plan_mode_tools: list[str] = Field(
+        default_factory=lambda: ["shell", "write_file", "edit_file"],
+        description="Tools that require approval in plan mode",
+    )
+
+    # Self-Audit Daemon
+    self_audit_enabled: bool = Field(default=True, description="Enable daily self-audit daemon")
+    self_audit_schedule: str = Field(
+        default="0 3 * * *", description="Cron schedule for self-audit (default: 3 AM daily)"
+    )
+
+    # OAuth
+    google_oauth_client_id: str | None = Field(
+        default=None, description="Google OAuth 2.0 client ID"
+    )
+    google_oauth_client_secret: str | None = Field(
+        default=None, description="Google OAuth 2.0 client secret"
+    )
+
+    # Voice/TTS
+    tts_provider: str = Field(
+        default="openai", description="TTS provider: 'openai' or 'elevenlabs'"
+    )
+    elevenlabs_api_key: str | None = Field(default=None, description="ElevenLabs API key for TTS")
+    tts_voice: str = Field(
+        default="alloy", description="TTS voice name (OpenAI: alloy/echo/fable/onyx/nova/shimmer)"
     )
 
     # Web Server
@@ -158,6 +244,10 @@ class Settings(BaseSettings):
             "agent_backend": self.agent_backend,
             "memory_backend": self.memory_backend,
             "memory_use_inference": self.memory_use_inference,
+            "compaction_recent_window": self.compaction_recent_window,
+            "compaction_char_budget": self.compaction_char_budget,
+            "compaction_summary_chars": self.compaction_summary_chars,
+            "compaction_llm_summarize": self.compaction_llm_summarize,
             "llm_provider": self.llm_provider,
             "ollama_host": self.ollama_host,
             "ollama_model": self.ollama_model,
@@ -173,6 +263,17 @@ class Settings(BaseSettings):
             "slack_bot_token": self.slack_bot_token or existing.get("slack_bot_token"),
             "slack_app_token": self.slack_app_token or existing.get("slack_app_token"),
             "slack_allowed_channel_ids": self.slack_allowed_channel_ids,
+            # Web Search
+            "web_search_provider": self.web_search_provider,
+            "tavily_api_key": self.tavily_api_key or existing.get("tavily_api_key"),
+            "brave_search_api_key": (
+                self.brave_search_api_key or existing.get("brave_search_api_key")
+            ),
+            "parallel_api_key": self.parallel_api_key or existing.get("parallel_api_key"),
+            "url_extract_provider": self.url_extract_provider,
+            # Image Generation
+            "google_api_key": self.google_api_key or existing.get("google_api_key"),
+            "image_model": self.image_model,
             # WhatsApp
             "whatsapp_mode": self.whatsapp_mode,
             "whatsapp_neonize_db": self.whatsapp_neonize_db,
@@ -186,6 +287,36 @@ class Settings(BaseSettings):
                 self.whatsapp_verify_token or existing.get("whatsapp_verify_token")
             ),
             "whatsapp_allowed_phone_numbers": self.whatsapp_allowed_phone_numbers,
+            # Tool policy
+            "tool_profile": self.tool_profile,
+            "tools_allow": self.tools_allow,
+            "tools_deny": self.tools_deny,
+            # Security
+            "injection_scan_enabled": self.injection_scan_enabled,
+            "injection_scan_llm": self.injection_scan_llm,
+            "injection_scan_llm_model": self.injection_scan_llm_model,
+            # Smart routing
+            "smart_routing_enabled": self.smart_routing_enabled,
+            "model_tier_simple": self.model_tier_simple,
+            "model_tier_moderate": self.model_tier_moderate,
+            "model_tier_complex": self.model_tier_complex,
+            # Plan mode
+            "plan_mode": self.plan_mode,
+            "plan_mode_tools": self.plan_mode_tools,
+            # Self-audit
+            "self_audit_enabled": self.self_audit_enabled,
+            "self_audit_schedule": self.self_audit_schedule,
+            # OAuth
+            "google_oauth_client_id": (
+                self.google_oauth_client_id or existing.get("google_oauth_client_id")
+            ),
+            "google_oauth_client_secret": (
+                self.google_oauth_client_secret or existing.get("google_oauth_client_secret")
+            ),
+            # Voice/TTS
+            "tts_provider": self.tts_provider,
+            "elevenlabs_api_key": (self.elevenlabs_api_key or existing.get("elevenlabs_api_key")),
+            "tts_voice": self.tts_voice,
         }
         config_path.write_text(json.dumps(data, indent=2))
 

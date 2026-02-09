@@ -104,25 +104,16 @@ class WebSocketAdapter(BaseChannelAdapter):
                 await ws.send_json({"type": "stream_end"})
                 return
 
-            # Legacy frontend expects 'message' for chunks too
-            msg_type = "message"
-
-            # If it's the very first chunk, we might want to send stream_start?
-            # But we don't track state easily here.
-            # Let's hope frontend doesn't strictly need stream_start if it's already waiting.
-            # (Legacy dashboard.py sent stream_start before headers)
-
             await ws.send_json(
                 {
-                    "type": msg_type,
+                    "type": "message",
                     "content": message.content,
+                    "is_stream_chunk": message.is_stream_chunk,
                     "metadata": message.metadata,
                 }
             )
-        except Exception:
-            pass  # Connection closed
-
-            pass  # Connection closed
+        except Exception as e:
+            logger.warning("WebSocket send failed: %s", e)
 
     async def broadcast(self, content: Any, msg_type: str = "notification") -> None:
         """Broadcast to all connected clients."""

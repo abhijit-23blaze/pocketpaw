@@ -172,12 +172,27 @@ class PocketPawSocket {
         this.send('chat', { message });
     }
 
-    saveSettings(agentBackend, llmProvider, anthropicModel, bypassPermissions) {
+    saveSettings(settings) {
         this.send('settings', {
-            agent_backend: agentBackend,
-            llm_provider: llmProvider,
-            anthropic_model: anthropicModel,
-            bypass_permissions: bypassPermissions
+            agent_backend: settings.agentBackend,
+            llm_provider: settings.llmProvider,
+            anthropic_model: settings.anthropicModel,
+            bypass_permissions: settings.bypassPermissions,
+            web_search_provider: settings.webSearchProvider,
+            url_extract_provider: settings.urlExtractProvider,
+            injection_scan_enabled: settings.injectionScanEnabled,
+            injection_scan_llm: settings.injectionScanLlm,
+            tool_profile: settings.toolProfile,
+            plan_mode: settings.planMode,
+            plan_mode_tools: settings.planModeTools,
+            smart_routing_enabled: settings.smartRoutingEnabled,
+            model_tier_simple: settings.modelTierSimple,
+            model_tier_moderate: settings.modelTierModerate,
+            model_tier_complex: settings.modelTierComplex,
+            tts_provider: settings.ttsProvider,
+            tts_voice: settings.ttsVoice,
+            self_audit_enabled: settings.selfAuditEnabled,
+            self_audit_schedule: settings.selfAuditSchedule
         });
     }
 

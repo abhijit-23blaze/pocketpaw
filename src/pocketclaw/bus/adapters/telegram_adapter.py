@@ -3,23 +3,20 @@ Telegram Channel Adapter.
 Created: 2026-02-02
 """
 
-import logging
 import asyncio
+import logging
 from typing import Any
 
-from telegram import Update, ForceReply
+from telegram import Update
 from telegram.ext import (
     Application,
     CommandHandler,
+    ContextTypes,
     MessageHandler,
     filters,
-    ContextTypes,
 )
-import telegram.error
 
-from pocketclaw.config import Settings
 from pocketclaw.bus import (
-    ChannelAdapter,
     BaseChannelAdapter,
     Channel,
     InboundMessage,
@@ -72,6 +69,17 @@ class TelegramAdapter(BaseChannelAdapter):
                 await self.app.stop()
             await self.app.shutdown()
             logger.info("🛑 Telegram Adapter stopped")
+
+    @staticmethod
+    def _parse_chat_id(raw_chat_id: str) -> tuple[str, int | None]:
+        """Parse a chat_id that may contain a topic suffix.
+
+        Returns (real_chat_id, topic_id_or_None).
+        """
+        if ":topic:" in raw_chat_id:
+            parts = raw_chat_id.split(":topic:")
+            return parts[0], int(parts[1])
+        return raw_chat_id, None
 
     async def send(self, message: OutboundMessage) -> None:
         """Send message to Telegram."""
@@ -149,9 +157,15 @@ class TelegramAdapter(BaseChannelAdapter):
                 return
 
             # Normal message (not stream)
-            await self.app.bot.send_message(
-                chat_id=chat_id, text=message.content, parse_mode="Markdown"
-            )
+            real_chat_id, topic_id = self._parse_chat_id(chat_id)
+            send_kwargs: dict[str, Any] = {
+                "chat_id": real_chat_id,
+                "text": message.content,
+                "parse_mode": "Markdown",
+            }
+            if topic_id is not None:
+                send_kwargs["message_thread_id"] = topic_id
+            await self.app.bot.send_message(**send_kwargs)
 
         except Exception as e:
             logger.error(f"Failed to send telegram message: {e}")
@@ -165,8 +179,12 @@ class TelegramAdapter(BaseChannelAdapter):
         content = message.content
 
         if chat_id not in self._buffers:
-            # Send initial message
-            sent_msg = await self.app.bot.send_message(chat_id=chat_id, text="🧠 ...")
+            # Send initial message (topic-aware)
+            real_chat_id, topic_id = self._parse_chat_id(chat_id)
+            send_kwargs: dict[str, Any] = {"chat_id": real_chat_id, "text": "🧠 ..."}
+            if topic_id is not None:
+                send_kwargs["message_thread_id"] = topic_id
+            sent_msg = await self.app.bot.send_message(**send_kwargs)
             self._buffers[chat_id] = {
                 "message_id": sent_msg.message_id,
                 "text": content,
@@ -192,8 +210,9 @@ class TelegramAdapter(BaseChannelAdapter):
         try:
             if not text.strip():
                 return
+            real_chat_id, _topic_id = self._parse_chat_id(chat_id)
             await self.app.bot.edit_message_text(
-                chat_id=chat_id,
+                chat_id=real_chat_id,
                 message_id=message_id,
                 text=text,
                 parse_mode=None,  # Markdown can break easily with partial streams
@@ -232,14 +251,15 @@ class TelegramAdapter(BaseChannelAdapter):
         if not content:
             return
 
-        # Create InboundMessage
-        # Note: Session Key for memory is typically "telegram:{chat_id}" or just "{chat_id}"
-        # Bus creates defaults.
+        # Build topic-aware chat_id for forum groups
+        base_chat_id = str(update.effective_chat.id)
+        topic_id = getattr(update.message, "message_thread_id", None)
+        chat_id = f"{base_chat_id}:topic:{topic_id}" if topic_id else base_chat_id
 
         msg = InboundMessage(
             channel=Channel.TELEGRAM,
             sender_id=str(user_id),
-            chat_id=str(update.effective_chat.id),
+            chat_id=chat_id,
             content=content,
             metadata={"username": update.effective_user.username},
         )

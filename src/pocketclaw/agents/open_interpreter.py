@@ -86,21 +86,47 @@ class OpenInterpreterAgent:
             logger.error(f"❌ Failed to initialize Open Interpreter: {e}")
             self._interpreter = None
 
-    async def run(self, message: str, system_message: str | None = None) -> AsyncIterator[dict]:
-        """Run a message through Open Interpreter with real-time streaming."""
+    async def run(
+        self,
+        message: str,
+        *,
+        system_prompt: str | None = None,
+        history: list[dict] | None = None,
+        system_message: str | None = None,
+    ) -> AsyncIterator[dict]:
+        """Run a message through Open Interpreter with real-time streaming.
+
+        Args:
+            message: User message to process.
+            system_prompt: Dynamic system prompt from AgentContextBuilder.
+            history: Recent session history (prepended as summary to prompt).
+            system_message: Legacy kwarg, superseded by system_prompt.
+        """
         if not self._interpreter:
             yield {"type": "message", "content": "❌ Open Interpreter not available."}
             return
 
         self._stop_flag = False
 
-        # Apply system message if provided
-        if system_message:
+        # Apply system prompt if provided (prefer system_prompt over legacy system_message)
+        effective_system = system_prompt or system_message
+        if effective_system:
             # We prepend to keep OI's functional instructions
-            # interpreter usually has its own long system_message
             self._interpreter.system_message = (
-                f"{system_message}\n\n{self._interpreter.system_message}"
+                f"{effective_system}\n\n{self._interpreter.system_message}"
             )
+
+        # If history provided, prepend a conversation summary to the prompt
+        if history:
+            summary_lines = ["[Recent conversation context]"]
+            for msg in history[-10:]:  # Last 10 messages to keep manageable
+                role = msg.get("role", "user").capitalize()
+                content = msg.get("content", "")
+                if len(content) > 300:
+                    content = content[:300] + "..."
+                summary_lines.append(f"{role}: {content}")
+            summary_lines.append("[End of context]\n")
+            message = "\n".join(summary_lines) + message
 
         # Use a queue to stream chunks from the sync thread to the async generator
         chunk_queue: asyncio.Queue = asyncio.Queue()

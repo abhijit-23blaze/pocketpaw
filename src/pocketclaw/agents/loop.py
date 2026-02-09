@@ -17,13 +17,13 @@ It replaces the old highly-coupled bot loops.
 
 import asyncio
 import logging
-from typing import Any
 
-from pocketclaw.config import get_settings, Settings
-from pocketclaw.bus import get_message_bus, InboundMessage, OutboundMessage, Channel, SystemEvent
-from pocketclaw.memory import get_memory_manager
-from pocketclaw.bootstrap import AgentContextBuilder
 from pocketclaw.agents.router import AgentRouter
+from pocketclaw.bootstrap import AgentContextBuilder
+from pocketclaw.bus import InboundMessage, OutboundMessage, SystemEvent, get_message_bus
+from pocketclaw.config import Settings, get_settings
+from pocketclaw.memory import get_memory_manager
+from pocketclaw.security.injection_scanner import ThreatLevel, get_injection_scanner
 
 logger = logging.getLogger(__name__)
 
@@ -85,15 +85,68 @@ class AgentLoop:
         logger.info(f"⚡ Processing message from {session_key}")
 
         try:
+            # 0. Injection scan for non-owner sources
+            content = message.content
+            if self.settings.injection_scan_enabled:
+                scanner = get_injection_scanner()
+                source = message.metadata.get("source", message.channel.value)
+                scan_result = scanner.scan(content, source=source)
+
+                if scan_result.threat_level == ThreatLevel.HIGH:
+                    if self.settings.injection_scan_llm:
+                        scan_result = await scanner.deep_scan(content, source=source)
+
+                    if scan_result.threat_level == ThreatLevel.HIGH:
+                        logger.warning(
+                            "Blocked HIGH threat injection from %s: %s",
+                            source,
+                            scan_result.matched_patterns,
+                        )
+                        await self.bus.publish_system(
+                            SystemEvent(
+                                event_type="error",
+                                data={
+                                    "message": "Message blocked by injection scanner",
+                                    "patterns": scan_result.matched_patterns,
+                                },
+                            )
+                        )
+                        await self.bus.publish_outbound(
+                            OutboundMessage(
+                                channel=message.channel,
+                                chat_id=message.chat_id,
+                                content=(
+                                    "Your message was flagged by the security scanner and blocked."
+                                ),
+                            )
+                        )
+                        return
+
+                # Wrap suspicious (non-blocked) content with sanitization markers
+                if scan_result.threat_level != ThreatLevel.NONE:
+                    content = scan_result.sanitized_content
+
             # 1. Store User Message
             await self.memory.add_to_session(
                 session_key=session_key,
                 role="user",
-                content=message.content,
+                content=content,
                 metadata=message.metadata,
             )
 
-            # 2. Emit thinking event
+            # 2. Build dynamic system prompt (identity + memory context)
+            system_prompt = await self.context_builder.build_system_prompt()
+
+            # 2a. Retrieve session history with compaction
+            history = await self.memory.get_compacted_history(
+                session_key,
+                recent_window=self.settings.compaction_recent_window,
+                char_budget=self.settings.compaction_char_budget,
+                summary_chars=self.settings.compaction_summary_chars,
+                llm_summarize=self.settings.compaction_llm_summarize,
+            )
+
+            # 2b. Emit thinking event
             await self.bus.publish_system(
                 SystemEvent(event_type="thinking", data={"session_key": session_key})
             )
@@ -102,7 +155,7 @@ class AgentLoop:
             router = self._get_router()
             full_response = ""
 
-            async for chunk in router.run(message.content):
+            async for chunk in router.run(content, system_prompt=system_prompt, history=history):
                 chunk_type = chunk.get("type", "")
                 content = chunk.get("content", "")
                 metadata = chunk.get("metadata") or {}
@@ -161,6 +214,23 @@ class AgentLoop:
                             chat_id=message.chat_id,
                             content=output_block,
                             is_stream_chunk=True,
+                        )
+                    )
+
+                elif chunk_type == "thinking":
+                    # Thinking goes to Activity panel only — NOT to OutboundMessage
+                    await self.bus.publish_system(
+                        SystemEvent(
+                            event_type="thinking",
+                            data={"content": content, "session_key": session_key},
+                        )
+                    )
+
+                elif chunk_type == "thinking_done":
+                    await self.bus.publish_system(
+                        SystemEvent(
+                            event_type="thinking_done",
+                            data={"session_key": session_key},
                         )
                     )
 

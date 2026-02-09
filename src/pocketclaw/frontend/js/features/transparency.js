@@ -81,7 +81,15 @@ window.PocketPaw.Transparency = {
                 let level = 'info';
 
                 if (eventType === 'thinking') {
-                    message = `<span class="text-accent animate-pulse">Thinking...</span>`;
+                    if (data.data && data.data.content) {
+                        const snippet = data.data.content.substring(0, 120);
+                        const ellipsis = data.data.content.length > 120 ? '...' : '';
+                        message = `<span class="text-white/40 italic">${snippet}${ellipsis}</span>`;
+                    } else {
+                        message = `<span class="text-accent animate-pulse">Thinking...</span>`;
+                    }
+                } else if (eventType === 'thinking_done') {
+                    message = `<span class="text-white/40">Thinking complete</span>`;
                 } else if (eventType === 'tool_start') {
                     message = `🔧 <b>${data.data.name}</b> <span class="text-white/50">${JSON.stringify(data.data.params)}</span>`;
                     level = 'warning';

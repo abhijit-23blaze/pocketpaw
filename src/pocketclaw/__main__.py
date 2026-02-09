@@ -207,6 +207,16 @@ Examples:
         "--whatsapp", action="store_true", help="Run headless WhatsApp webhook server"
     )
     parser.add_argument(
+        "--security-audit",
+        action="store_true",
+        help="Run security audit and print report",
+    )
+    parser.add_argument(
+        "--fix",
+        action="store_true",
+        help="Auto-fix fixable issues found by --security-audit",
+    )
+    parser.add_argument(
         "--port", "-p", type=int, default=8888, help="Port for web server (default: 8888)"
     )
     parser.add_argument("--version", "-v", action="version", version="%(prog)s 0.2.0")
@@ -217,7 +227,12 @@ Examples:
     has_channel_flag = args.discord or args.slack or args.whatsapp
 
     try:
-        if args.telegram:
+        if args.security_audit:
+            from pocketclaw.security.audit_cli import run_security_audit
+
+            exit_code = asyncio.run(run_security_audit(fix=args.fix))
+            raise SystemExit(exit_code)
+        elif args.telegram:
             asyncio.run(run_telegram_mode(settings))
         elif has_channel_flag:
             asyncio.run(run_multi_channel_mode(settings, args))

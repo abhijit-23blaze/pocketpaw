@@ -48,33 +48,71 @@ DANGEROUS_PATTERNS = [
     "wget | bash",
 ]
 
-# PocketPaw system prompt for Claude Agent SDK
-SYSTEM_PROMPT = """You are PocketPaw, a helpful AI assistant running locally on the user's computer.
+# Default identity fallback (used when AgentContextBuilder prompt is not available)
+_DEFAULT_IDENTITY = (
+    "You are PocketPaw, a helpful AI assistant running locally on the user's computer."
+)
 
-You have powerful tools at your disposal:
+# Tool-specific instructions — appended to every system prompt regardless of source
+_TOOL_INSTRUCTIONS = """
+## Built-in SDK Tools
 - Bash: Run shell commands
 - Read/Write/Edit: File operations
 - Glob/Grep: Search files and content
-- WebSearch: Search the web for information
-- WebFetch: Fetch content from URLs
+- WebSearch/WebFetch: Search the web and fetch URLs
+
+## PocketPaw Tools (call via Bash)
+
+You have extra tools installed. Call them with:
+```bash
+python -m pocketclaw.tools.cli <tool_name> '<json_args>'
+```
+
+### Email (Gmail — requires OAuth)
+- `gmail_search '{"query": "is:unread", "max_results": 10}'` — search emails
+- `gmail_read '{"message_id": "MSG_ID"}'` — read full email
+- `gmail_send '{"to": "x@y.com", "subject": "Hi", "body": "..."}'` — send email
+- `gmail_list_labels '{}'` — list all labels
+- `gmail_create_label '{"name": "MyLabel"}'` — create label (use / for nesting)
+- `gmail_modify '{"message_id": "ID", "add_labels": ["LABEL"], "remove_labels": ["INBOX"]}'`
+- `gmail_trash '{"message_id": "ID"}'` — trash a message
+- `gmail_batch_modify '{"message_ids": ["ID1","ID2"], "add_labels": ["L1"]}'`
+  Built-in label IDs: INBOX, SPAM, TRASH, UNREAD, STARRED, IMPORTANT
+
+### Calendar (Google Calendar — requires OAuth)
+- `calendar_list '{"max_results": 10}'` — list upcoming events
+- `calendar_create '{"summary": "Meeting", "start": "2026-02-08T10:00:00", "end": "2026-02-08T11:00:00"}'`
+- `calendar_prep '{"hours_ahead": 24}'` — prep summary for upcoming meetings
+
+### Voice / TTS
+- `text_to_speech '{"text": "Hello world", "voice": "alloy"}'` — generate speech audio
+  Voices (OpenAI): alloy, echo, fable, onyx, nova, shimmer
+
+### Research
+- `research '{"topic": "quantum computing", "depth": "standard"}'` — multi-source research
+  Depths: quick (3 sources), standard (5), deep (10)
+
+### Image Generation
+- `image_generate '{"prompt": "a sunset over mountains", "aspect_ratio": "16:9"}'`
+
+### Web Content
+- `web_search '{"query": "latest news on AI"}'` — web search (Tavily/Brave)
+- `url_extract '{"urls": ["https://example.com"]}'` — extract clean text from URLs
+
+### Skills
+- `create_skill '{"skill_name": "my-skill", "description": "...", "prompt_template": "..."}'`
+
+### Delegation
+- `delegate_claude_code '{"task": "refactor the auth module", "timeout": 300}'` — delegate to Claude Code CLI
 
 ## Guidelines
 
-1. **Be AGENTIC** - Don't just describe what to do, actually DO it using your tools.
-2. **Query actual data** - When asked about calendar, emails, etc., use Bash with AppleScript/Python to QUERY the data.
-3. **Be concise** - Give clear, helpful responses.
-4. **Be safe** - Don't run destructive commands. Ask for confirmation if unsure.
-
-## Examples of AGENTIC behavior
-
-| User Says | You Should Do |
-|-----------|---------------|
-| "What's on my calendar today?" | Use Bash with AppleScript to query Calendar.app and return actual events |
-| "Find files with TODO" | Use Grep to search and return matching files |
-| "What's the weather?" | Use WebSearch to find current weather |
-| "Download that PDF" | Use WebFetch or Bash with curl |
-
-Always execute tasks and return results, don't just explain how to do them.
+1. **Be AGENTIC** — execute tasks using tools, don't just describe how.
+2. **Use PocketPaw tools** — always prefer `python -m pocketclaw.tools.cli` over platform-specific commands (AppleScript, PowerShell, etc.). These tools work on all operating systems.
+3. **Be concise** — give clear, helpful responses.
+4. **Be safe** — don't run destructive commands. Ask for confirmation if unsure.
+5. If Gmail/Calendar returns "not authenticated", tell the user to visit:
+   http://localhost:8888/api/oauth/authorize?service=google_gmail (or google_calendar)
 """
 
 
@@ -125,6 +163,7 @@ class ClaudeAgentSDK:
         self._TextBlock = None
         self._ToolUseBlock = None
         self._ToolResultBlock = None
+        self._StreamEvent = None
 
         self._initialize()
 
@@ -164,6 +203,15 @@ class ClaudeAgentSDK:
             self._TextBlock = TextBlock
             self._ToolUseBlock = ToolUseBlock
             self._ToolResultBlock = ToolResultBlock
+
+            # StreamEvent for token-by-token streaming (optional)
+            try:
+                from claude_agent_sdk import StreamEvent
+
+                self._StreamEvent = StreamEvent
+            except ImportError:
+                self._StreamEvent = None
+                logger.info("StreamEvent not available - coarse-grained streaming only")
 
             self._sdk_available = True
             logger.info("✓ Claude Agent SDK ready ─ cwd: %s", self._cwd)
@@ -309,13 +357,23 @@ class ClaudeAgentSDK:
                 )
         return tools
 
-    async def chat(self, message: str) -> AsyncIterator[AgentEvent]:
+    async def chat(
+        self,
+        message: str,
+        *,
+        system_prompt: str | None = None,
+        history: list[dict] | None = None,
+    ) -> AsyncIterator[AgentEvent]:
         """Process a message through Claude Agent SDK with streaming.
 
         Uses the SDK's built-in tools and streaming capabilities.
 
         Args:
-            message: User message to process
+            message: User message to process.
+            system_prompt: Dynamic system prompt from AgentContextBuilder.
+                Falls back to _DEFAULT_IDENTITY if not provided.
+            history: Recent session history as {"role", "content"} dicts.
+                Injected into the system prompt (SDK query() takes a single prompt string).
 
         Yields:
             AgentEvent objects as the agent responds
@@ -330,6 +388,22 @@ class ClaudeAgentSDK:
         self._stop_flag = False
 
         try:
+            # Compose final system prompt: identity/memory + tool docs
+            identity = system_prompt or _DEFAULT_IDENTITY
+            final_prompt = identity + "\n" + _TOOL_INSTRUCTIONS
+
+            # Inject session history into system prompt (SDK query() takes a single string)
+            if history:
+                lines = ["# Recent Conversation"]
+                for msg in history:
+                    role = msg.get("role", "user").capitalize()
+                    content = msg.get("content", "")
+                    # Truncate very long messages to keep prompt manageable
+                    if len(content) > 500:
+                        content = content[:500] + "..."
+                    lines.append(f"**{role}**: {content}")
+                final_prompt += "\n\n" + "\n".join(lines)
+
             # Build allowed tools list, filtered by tool policy
             all_sdk_tools = [
                 "Bash",
@@ -362,11 +436,15 @@ class ClaudeAgentSDK:
 
             # Build options
             options_kwargs = {
-                "system_prompt": SYSTEM_PROMPT,
+                "system_prompt": final_prompt,
                 "allowed_tools": allowed_tools,
                 "hooks": hooks,
                 "cwd": str(self._cwd),  # Working directory
             }
+
+            # Enable token-by-token streaming if StreamEvent is available
+            if self._StreamEvent is not None:
+                options_kwargs["include_partial_messages"] = True
 
             # Permission mode based on settings
             if self.settings.bypass_permissions:
@@ -379,7 +457,25 @@ class ClaudeAgentSDK:
             # Create options
             options = self._ClaudeAgentOptions(**options_kwargs)
 
+            # Smart model routing (opt-in)
+            if self.settings.smart_routing_enabled:
+                from pocketclaw.agents.model_router import ModelRouter
+
+                model_router = ModelRouter(self.settings)
+                selection = model_router.classify(message)
+                options_kwargs["model"] = selection.model
+                logger.info(
+                    "Smart routing: %s -> %s (%s)",
+                    selection.complexity.value,
+                    selection.model,
+                    selection.reason,
+                )
+
             logger.debug(f"🚀 Starting Claude Agent SDK query: {message[:100]}...")
+
+            # State tracking for StreamEvent deduplication
+            _streamed_via_events = False
+            _announced_tools: set[str] = set()
 
             # Stream responses from the SDK
             async for event in self._query(prompt=message, options=options):
@@ -388,6 +484,34 @@ class ClaudeAgentSDK:
                     break
 
                 # Handle different message types using isinstance checks
+
+                # ========== StreamEvent - token-by-token streaming ==========
+                if self._StreamEvent and isinstance(event, self._StreamEvent):
+                    raw = getattr(event, "event", None) or {}
+                    event_type = raw.get("type", "")
+                    delta = raw.get("delta", {})
+
+                    if event_type == "content_block_delta":
+                        if "text" in delta:
+                            yield AgentEvent(type="message", content=delta["text"])
+                            _streamed_via_events = True
+                        elif "thinking" in delta:
+                            yield AgentEvent(type="thinking", content=delta["thinking"])
+                    elif event_type == "content_block_start":
+                        cb = raw.get("content_block", {})
+                        if cb.get("type") == "tool_use":
+                            tool_name = cb.get("name", "unknown")
+                            _announced_tools.add(tool_name)
+                            yield AgentEvent(
+                                type="tool_use",
+                                content=f"Using {tool_name}...",
+                                metadata={"name": tool_name, "input": {}},
+                            )
+                    elif event_type == "content_block_stop":
+                        # Detect thinking block stop via the partial field
+                        if getattr(event, "_block_type", None) == "thinking":
+                            yield AgentEvent(type="thinking_done", content="")
+                    continue
 
                 # ========== SystemMessage - metadata, skip ==========
                 if self._SystemMessage and isinstance(event, self._SystemMessage):
@@ -402,20 +526,26 @@ class ClaudeAgentSDK:
 
                 # ========== AssistantMessage - main content ==========
                 if self._AssistantMessage and isinstance(event, self._AssistantMessage):
-                    # Extract and yield text
-                    text = self._extract_text_from_message(event)
-                    if text:
-                        yield AgentEvent(type="message", content=text)
+                    # Skip text if already streamed via StreamEvent deltas
+                    if not _streamed_via_events:
+                        text = self._extract_text_from_message(event)
+                        if text:
+                            yield AgentEvent(type="message", content=text)
 
-                    # Emit tool_use events with proper metadata
+                    # Emit tool_use events only for tools NOT already announced
                     tools = self._extract_tool_info(event)
                     for tool in tools:
-                        logger.info(f"🔧 Tool: {tool['name']}")
-                        yield AgentEvent(
-                            type="tool_use",
-                            content=f"Using {tool['name']}...",
-                            metadata={"name": tool["name"], "input": tool["input"]},
-                        )
+                        if tool["name"] not in _announced_tools:
+                            logger.info(f"🔧 Tool: {tool['name']}")
+                            yield AgentEvent(
+                                type="tool_use",
+                                content=f"Using {tool['name']}...",
+                                metadata={"name": tool["name"], "input": tool["input"]},
+                            )
+
+                    # Reset for next turn in multi-turn loops
+                    _streamed_via_events = False
+                    _announced_tools.clear()
                     continue
 
                 # ========== ResultMessage - final result ==========
@@ -480,9 +610,15 @@ class ClaudeAgentSDKWrapper(ClaudeAgentSDK):
     Provides the `run()` method that yields dicts instead of AgentEvents.
     """
 
-    async def run(self, message: str) -> AsyncIterator[dict]:
+    async def run(
+        self,
+        message: str,
+        *,
+        system_prompt: str | None = None,
+        history: list[dict] | None = None,
+    ) -> AsyncIterator[dict]:
         """Run the agent, yielding dict chunks for compatibility."""
-        async for event in self.chat(message):
+        async for event in self.chat(message, system_prompt=system_prompt, history=history):
             yield {
                 "type": event.type,
                 "content": event.content,

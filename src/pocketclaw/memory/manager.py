@@ -8,8 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from pocketclaw.memory.protocol import MemoryStoreProtocol, MemoryEntry, MemoryType
 from pocketclaw.memory.file_store import FileMemoryStore
+from pocketclaw.memory.protocol import MemoryEntry, MemoryStoreProtocol, MemoryType
 
 logger = logging.getLogger(__name__)
 
@@ -240,6 +240,168 @@ class MemoryManager:
             context = context[:max_chars] + "\n...(truncated)"
 
         return context
+
+    async def get_compacted_history(
+        self,
+        session_key: str,
+        recent_window: int = 10,
+        char_budget: int = 8000,
+        summary_chars: int = 150,
+        llm_summarize: bool = False,
+    ) -> list[dict[str, str]]:
+        """Get session history with compaction.
+
+        Keeps the last `recent_window` messages verbatim and collapses
+        older messages into condensed one-liner extracts (Tier 1) or an
+        LLM-generated summary (Tier 2, opt-in).
+
+        Args:
+            session_key: The session identifier.
+            recent_window: Number of recent messages to keep verbatim.
+            char_budget: Max total characters for the returned history.
+            summary_chars: Max chars per older message extract (Tier 1).
+            llm_summarize: Use LLM to summarize older messages (Tier 2).
+
+        Returns:
+            List of {"role": "...", "content": "..."} dicts.
+        """
+        entries = await self._store.get_session(session_key)
+        if not entries:
+            return []
+
+        all_messages = [{"role": e.role or "user", "content": e.content} for e in entries]
+
+        # Split into older and recent
+        split_point = max(0, len(all_messages) - recent_window)
+        older = all_messages[:split_point]
+        recent = all_messages[split_point:]
+
+        if not older:
+            return self._enforce_budget(recent, char_budget)
+
+        # Tier 2: Try LLM summary if enabled
+        summary_block: str | None = None
+        if llm_summarize:
+            summary_block = await self._get_or_create_llm_summary(
+                session_key, older, len(all_messages)
+            )
+
+        # Tier 1 fallback: one-liner extracts
+        if summary_block is None:
+            lines = []
+            for msg in older:
+                role = msg["role"].capitalize()
+                text = msg["content"].replace("\n", " ").strip()
+                if len(text) > summary_chars:
+                    # Truncate at word boundary
+                    truncated = text[:summary_chars].rsplit(" ", 1)[0]
+                    text = truncated + "..."
+                lines.append(f"{role}: {text}")
+            summary_block = "\n".join(lines)
+
+        compacted = [{"role": "user", "content": f"[Earlier conversation]\n{summary_block}"}]
+        compacted.extend(recent)
+
+        return self._enforce_budget(compacted, char_budget)
+
+    @staticmethod
+    def _enforce_budget(messages: list[dict[str, str]], char_budget: int) -> list[dict[str, str]]:
+        """Drop oldest messages until total chars fit within budget.
+
+        If a single message exceeds the budget, truncate it.
+        """
+        total = sum(len(m["content"]) for m in messages)
+        if total <= char_budget:
+            return messages
+
+        # Drop from oldest until within budget
+        result = list(messages)
+        while len(result) > 1 and sum(len(m["content"]) for m in result) > char_budget:
+            result.pop(0)
+
+        # If single remaining message still exceeds budget, truncate it
+        if result and len(result[0]["content"]) > char_budget:
+            result[0] = {
+                "role": result[0]["role"],
+                "content": result[0]["content"][:char_budget],
+            }
+
+        return result
+
+    async def _get_or_create_llm_summary(
+        self,
+        session_key: str,
+        older_entries: list[dict[str, str]],
+        current_total: int,
+    ) -> str | None:
+        """Get cached or create new LLM summary of older messages.
+
+        Returns None on any error (caller falls back to Tier 1).
+        """
+        try:
+            # Need sessions_path from the store (FileMemoryStore has it, Mem0 may not)
+            if not hasattr(self._store, "sessions_path"):
+                return None
+
+            safe_key = session_key.replace(":", "_").replace("/", "_")
+            cache_path: Path = self._store.sessions_path / f"{safe_key}_compaction.json"
+
+            # Check cache
+            if cache_path.exists():
+                import json
+
+                cache = json.loads(cache_path.read_text())
+                if cache.get("watermark") == current_total:
+                    return cache["summary"]
+
+            # Build input for LLM (cap at 4000 chars)
+            lines = []
+            for msg in older_entries:
+                lines.append(f"{msg['role'].capitalize()}: {msg['content']}")
+            input_text = "\n".join(lines)
+            if len(input_text) > 4000:
+                input_text = input_text[:4000]
+
+            # Call Haiku via AsyncAnthropic
+            from anthropic import AsyncAnthropic
+
+            client = AsyncAnthropic()
+            response = await client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=256,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": (
+                            "Summarize the following conversation in 2-3 sentences. "
+                            "Focus on key topics discussed, decisions made, and any "
+                            "important context.\n\n"
+                            f"{input_text}"
+                        ),
+                    }
+                ],
+            )
+            summary = response.content[0].text
+
+            # Write cache
+            import json
+
+            cache_path.write_text(
+                json.dumps(
+                    {
+                        "watermark": current_total,
+                        "summary": summary,
+                        "older_count": len(older_entries),
+                    },
+                    indent=2,
+                )
+            )
+
+            return summary
+
+        except Exception:
+            logger.debug("LLM summary failed, falling back to Tier 1", exc_info=True)
+            return None
 
     async def clear_session(self, session_key: str) -> int:
         """Clear session history."""

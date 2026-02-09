@@ -85,11 +85,20 @@ slack = [
 whatsapp-personal = [
     "neonize>=0.3.0",
 ]
+image = [
+    "google-genai>=1.0.0",
+]
+extract = [
+    "html2text>=2020.1.16",
+]
+voice = [
+    "elevenlabs>=1.0.0",
+]
 channels = [
     "pocketpaw[discord,slack]",
 ]
 all = [
-    "pocketpaw[memory,channels,whatsapp-personal]",
+    "pocketpaw[memory,channels,whatsapp-personal,image,extract,voice]",
 ]
 
 [project.scripts]

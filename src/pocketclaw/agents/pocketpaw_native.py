@@ -99,12 +99,15 @@ REDACT_PATTERNS = [
     r"api[_-]?key[\"']?\s*[:=]\s*[\"']([^\"']+)",  # api_key = "..."
 ]
 
-# System prompt - PocketPaw's personality and instructions
-SYSTEM_PROMPT = """You are PocketPaw, a helpful AI assistant that runs locally on the user's computer.
+# Default identity fallback (used when AgentContextBuilder prompt is not available)
+_DEFAULT_IDENTITY = (
+    "You are PocketPaw, a helpful AI assistant that runs locally on the user's computer.\n"
+    "You have access to powerful tools that let you control the computer, access apps, "
+    "and manage files.\nYou are resourceful, careful, and efficient."
+)
 
-You have access to powerful tools that let you control the computer, access apps, and manage files.
-You are resourceful, careful, and efficient.
-
+# Tool-specific guide — appended to every system prompt regardless of source
+_TOOL_GUIDE = """
 ## CRITICAL: Be AGENTIC - Query and Return Data
 
 **DO NOT just open apps. ALWAYS query actual data and tell the user the information.**
@@ -593,7 +596,13 @@ class PocketPawOrchestrator:
             # Security: redact secrets from error messages too
             return self._redact_secrets(f"Error executing {tool_name}: {e}")
 
-    async def chat(self, message: str) -> AsyncIterator[AgentEvent]:
+    async def chat(
+        self,
+        message: str,
+        *,
+        system_prompt: str | None = None,
+        history: list[dict] | None = None,
+    ) -> AsyncIterator[AgentEvent]:
         """Process a message through the orchestrator.
 
         This is the main agentic loop:
@@ -601,6 +610,12 @@ class PocketPawOrchestrator:
         2. If Claude responds with text → yield it
         3. If Claude wants to use a tool → execute it → feed result back
         4. Repeat until done
+
+        Args:
+            message: User message to process.
+            system_prompt: Dynamic system prompt from AgentContextBuilder.
+            history: Recent session history as {"role", "content"} dicts.
+                Prepended to the messages list for multi-turn context.
         """
         if not self._client:
             yield AgentEvent(
@@ -611,7 +626,17 @@ class PocketPawOrchestrator:
         self._stop_flag = False
 
         # Conversation history for this request
-        messages = [{"role": "user", "content": message}]
+        messages: list[dict] = []
+
+        # Prepend session history for multi-turn context (Anthropic API supports this natively)
+        if history:
+            for msg in history:
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                if content:
+                    messages.append({"role": role, "content": content})
+
+        messages.append({"role": "user", "content": message})
 
         # Maximum iterations to prevent infinite loops
         max_iterations = 10
@@ -622,11 +647,30 @@ class PocketPawOrchestrator:
                 iteration += 1
                 logger.debug(f"Iteration {iteration}/{max_iterations}")
 
+                # Smart model routing (opt-in)
+                model = self.settings.anthropic_model
+                if self.settings.smart_routing_enabled:
+                    from pocketclaw.agents.model_router import ModelRouter
+
+                    model_router = ModelRouter(self.settings)
+                    selection = model_router.classify(message)
+                    model = selection.model
+                    logger.info(
+                        "Smart routing: %s -> %s (%s)",
+                        selection.complexity.value,
+                        selection.model,
+                        selection.reason,
+                    )
+
+                # Compose final system prompt: identity/memory + tool guide
+                identity = system_prompt or _DEFAULT_IDENTITY
+                final_system = identity + "\n" + _TOOL_GUIDE
+
                 # Call Claude
                 response = self._client.messages.create(
-                    model=self.settings.anthropic_model,
+                    model=model,
                     max_tokens=4096,
-                    system=SYSTEM_PROMPT,
+                    system=final_system,
                     tools=self._get_filtered_tools(),
                     messages=messages,
                 )
@@ -690,9 +734,15 @@ class PocketPawOrchestrator:
             logger.error(f"PocketPaw error: {e}")
             yield AgentEvent(type="error", content=f"❌ Error: {e}")
 
-    async def run(self, message: str) -> AsyncIterator[dict]:
+    async def run(
+        self,
+        message: str,
+        *,
+        system_prompt: str | None = None,
+        history: list[dict] | None = None,
+    ) -> AsyncIterator[dict]:
         """Run method for compatibility with router."""
-        async for event in self.chat(message):
+        async for event in self.chat(message, system_prompt=system_prompt, history=history):
             yield {"type": event.type, "content": event.content}
 
     async def stop(self) -> None:

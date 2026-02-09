@@ -121,6 +121,20 @@ class ToolRegistry:
             # But we might log "success" with generic context
             audit.log_tool_use(name, params, severity=severity, status="success")
 
+            # Injection scan on tool results (e.g. web content)
+            try:
+                from pocketclaw.config import get_settings
+                from pocketclaw.security.injection_scanner import get_injection_scanner
+
+                settings = get_settings()
+                if settings.injection_scan_enabled and result:
+                    scanner = get_injection_scanner()
+                    scan = scanner.scan(result, source=f"tool:{name}")
+                    if scan.threat_level.value != "none":
+                        result = scan.sanitized_content
+            except Exception:
+                pass  # Don't let scanner errors break tool execution
+
             # Log truncation to avoid massive log files
             log_result = result[:200] + "..." if len(result) > 200 else result
             logger.debug(f"🔧 {name} result: {log_result}")

@@ -21,6 +21,7 @@ window.PocketPaw.Chat = {
             // Agent state
             agentActive: true,
             isStreaming: false,
+            isThinking: false,
             streamingContent: '',
             streamingMessageId: null,
             hasShownWelcome: false,
@@ -66,6 +67,16 @@ window.PocketPaw.Chat = {
                     return;
                 }
 
+                // Server-side stream flag — auto-enter streaming if we missed stream_start
+                if (data.is_stream_chunk && !this.isStreaming) {
+                    this.startStreaming();
+                }
+
+                // Clear thinking state on first text content
+                if (this.isThinking && content) {
+                    this.isThinking = false;
+                }
+
                 // Handle streaming vs complete messages
                 if (this.isStreaming) {
                     this.streamingContent += content;
@@ -98,6 +109,7 @@ window.PocketPaw.Chat = {
              */
             startStreaming() {
                 this.isStreaming = true;
+                this.isThinking = true;
                 this.streamingContent = '';
             },
 
@@ -109,6 +121,7 @@ window.PocketPaw.Chat = {
                     this.addMessage('assistant', this.streamingContent);
                 }
                 this.isStreaming = false;
+                this.isThinking = false;
                 this.streamingContent = '';
             },
 

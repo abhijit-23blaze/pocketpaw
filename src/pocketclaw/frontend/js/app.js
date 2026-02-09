@@ -61,19 +61,46 @@ function app() {
 
         // Settings
         settings: {
-            agentBackend: 'claude_agent_sdk',  // Default: Claude Agent SDK (recommended)
+            agentBackend: 'claude_agent_sdk',
             llmProvider: 'auto',
             anthropicModel: 'claude-sonnet-4-5-20250929',
-            bypassPermissions: false
+            bypassPermissions: false,
+            webSearchProvider: 'tavily',
+            urlExtractProvider: 'auto',
+            injectionScanEnabled: true,
+            injectionScanLlm: false,
+            toolProfile: 'full',
+            planMode: false,
+            planModeTools: 'shell,write_file,edit_file',
+            smartRoutingEnabled: false,
+            modelTierSimple: 'claude-haiku-4-5-20251001',
+            modelTierModerate: 'claude-sonnet-4-5-20250929',
+            modelTierComplex: 'claude-opus-4-6',
+            ttsProvider: 'openai',
+            ttsVoice: 'alloy',
+            selfAuditEnabled: true,
+            selfAuditSchedule: '0 3 * * *'
         },
 
         // API Keys (not persisted client-side, but we track if saved on server)
         apiKeys: {
             anthropic: '',
-            openai: ''
+            openai: '',
+            tavily: '',
+            brave: '',
+            parallel: '',
+            elevenlabs: '',
+            google_oauth_id: '',
+            google_oauth_secret: ''
         },
         hasAnthropicKey: false,
         hasOpenaiKey: false,
+        hasTavilyKey: false,
+        hasBraveKey: false,
+        hasParallelKey: false,
+        hasElevenlabsKey: false,
+        hasGoogleOAuthId: false,
+        hasGoogleOAuthSecret: false,
 
         // Spread feature states
         ...featureStates,
@@ -238,9 +265,60 @@ function app() {
                 if (serverSettings.bypassPermissions !== undefined) {
                     this.settings.bypassPermissions = serverSettings.bypassPermissions;
                 }
+                if (serverSettings.webSearchProvider) {
+                    this.settings.webSearchProvider = serverSettings.webSearchProvider;
+                }
+                if (serverSettings.urlExtractProvider) {
+                    this.settings.urlExtractProvider = serverSettings.urlExtractProvider;
+                }
+                if (serverSettings.injectionScanEnabled !== undefined) {
+                    this.settings.injectionScanEnabled = serverSettings.injectionScanEnabled;
+                }
+                if (serverSettings.injectionScanLlm !== undefined) {
+                    this.settings.injectionScanLlm = serverSettings.injectionScanLlm;
+                }
+                if (serverSettings.toolProfile) {
+                    this.settings.toolProfile = serverSettings.toolProfile;
+                }
+                if (serverSettings.planMode !== undefined) {
+                    this.settings.planMode = serverSettings.planMode;
+                }
+                if (serverSettings.planModeTools !== undefined) {
+                    this.settings.planModeTools = serverSettings.planModeTools;
+                }
+                if (serverSettings.smartRoutingEnabled !== undefined) {
+                    this.settings.smartRoutingEnabled = serverSettings.smartRoutingEnabled;
+                }
+                if (serverSettings.modelTierSimple) {
+                    this.settings.modelTierSimple = serverSettings.modelTierSimple;
+                }
+                if (serverSettings.modelTierModerate) {
+                    this.settings.modelTierModerate = serverSettings.modelTierModerate;
+                }
+                if (serverSettings.modelTierComplex) {
+                    this.settings.modelTierComplex = serverSettings.modelTierComplex;
+                }
+                if (serverSettings.ttsProvider) {
+                    this.settings.ttsProvider = serverSettings.ttsProvider;
+                }
+                if (serverSettings.ttsVoice !== undefined) {
+                    this.settings.ttsVoice = serverSettings.ttsVoice;
+                }
+                if (serverSettings.selfAuditEnabled !== undefined) {
+                    this.settings.selfAuditEnabled = serverSettings.selfAuditEnabled;
+                }
+                if (serverSettings.selfAuditSchedule) {
+                    this.settings.selfAuditSchedule = serverSettings.selfAuditSchedule;
+                }
                 // Store API key availability (for UI feedback)
                 this.hasAnthropicKey = serverSettings.hasAnthropicKey || false;
                 this.hasOpenaiKey = serverSettings.hasOpenaiKey || false;
+                this.hasTavilyKey = serverSettings.hasTavilyKey || false;
+                this.hasBraveKey = serverSettings.hasBraveKey || false;
+                this.hasParallelKey = serverSettings.hasParallelKey || false;
+                this.hasElevenlabsKey = serverSettings.hasElevenlabsKey || false;
+                this.hasGoogleOAuthId = serverSettings.hasGoogleOAuthId || false;
+                this.hasGoogleOAuthSecret = serverSettings.hasGoogleOAuthSecret || false;
 
                 // Log agent status if available (for debugging)
                 if (serverSettings.agentStatus) {
@@ -299,12 +377,7 @@ function app() {
          * Save settings
          */
         saveSettings() {
-            socket.saveSettings(
-                this.settings.agentBackend,
-                this.settings.llmProvider,
-                this.settings.anthropicModel,
-                this.settings.bypassPermissions
-            );
+            socket.saveSettings(this.settings);
             this.log('Settings updated', 'info');
             this.showToast('Settings saved', 'success');
         },
@@ -321,6 +394,22 @@ function app() {
 
             socket.saveApiKey(provider, key);
             this.apiKeys[provider] = ''; // Clear input
+
+            // Update local hasKey flags immediately
+            const keyMap = {
+                'anthropic': 'hasAnthropicKey',
+                'openai': 'hasOpenaiKey',
+                'tavily': 'hasTavilyKey',
+                'brave': 'hasBraveKey',
+                'parallel': 'hasParallelKey',
+                'elevenlabs': 'hasElevenlabsKey',
+                'google_oauth_id': 'hasGoogleOAuthId',
+                'google_oauth_secret': 'hasGoogleOAuthSecret'
+            };
+            if (keyMap[provider]) {
+                this[keyMap[provider]] = true;
+            }
+
             this.log(`Saved ${provider} API key`, 'success');
             this.showToast(`${provider.charAt(0).toUpperCase() + provider.slice(1)} API key saved!`, 'success');
         },
