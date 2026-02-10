@@ -82,7 +82,7 @@ INSTALLER="$TMPDIR/pocketpaw_installer.py"
 cleanup() { rm -f "$INSTALLER"; }
 trap cleanup EXIT INT TERM
 
-INSTALLER_URL="https://raw.githubusercontent.com/pocketpaw/pocketpaw/main/installer/installer.py"
+INSTALLER_URL="https://raw.githubusercontent.com/pocketpaw/pocketpaw/dev/installer/installer.py"
 
 if command -v curl >/dev/null 2>&1; then
     DOWNLOAD="curl -fsSL"
