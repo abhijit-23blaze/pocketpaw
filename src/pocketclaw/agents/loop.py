@@ -28,12 +28,20 @@ from pocketclaw.security.injection_scanner import ThreatLevel, get_injection_sca
 logger = logging.getLogger(__name__)
 
 
-async def _iter_with_timeout(aiter, timeout=120):
-    """Yield items from an async iterator with a per-item timeout."""
+async def _iter_with_timeout(aiter, first_timeout=30, timeout=120):
+    """Yield items from an async iterator with per-item timeouts.
+
+    Uses a shorter timeout for the first item (to detect dead/hung backends
+    quickly) and a longer timeout for subsequent items (to allow for tool
+    execution, file operations, etc.).
+    """
     ait = aiter.__aiter__()
+    first = True
     while True:
         try:
-            yield await asyncio.wait_for(ait.__anext__(), timeout=timeout)
+            t = first_timeout if first else timeout
+            yield await asyncio.wait_for(ait.__anext__(), timeout=t)
+            first = False
         except StopAsyncIteration:
             break
 
@@ -186,134 +194,149 @@ class AgentLoop:
             full_response = ""
 
             run_iter = router.run(content, system_prompt=system_prompt, history=history)
-            async for chunk in _iter_with_timeout(run_iter, timeout=120):
-                chunk_type = chunk.get("type", "")
-                content = chunk.get("content", "")
-                metadata = chunk.get("metadata") or {}
+            try:
+                async for chunk in _iter_with_timeout(run_iter):
+                    chunk_type = chunk.get("type", "")
+                    content = chunk.get("content", "")
+                    metadata = chunk.get("metadata") or {}
 
-                if chunk_type == "message":
-                    # Stream text to user
-                    full_response += content
-                    await self.bus.publish_outbound(
-                        OutboundMessage(
-                            channel=message.channel,
-                            chat_id=message.chat_id,
-                            content=content,
-                            is_stream_chunk=True,
+                    if chunk_type == "message":
+                        # Stream text to user
+                        full_response += content
+                        await self.bus.publish_outbound(
+                            OutboundMessage(
+                                channel=message.channel,
+                                chat_id=message.chat_id,
+                                content=content,
+                                is_stream_chunk=True,
+                            )
                         )
-                    )
 
-                elif chunk_type == "code":
-                    # Code block from Open Interpreter - emit as tool_use
-                    language = metadata.get("language", "code")
-                    await self.bus.publish_system(
-                        SystemEvent(
-                            event_type="tool_start",
-                            data={"name": f"run_{language}", "params": {"code": content[:100]}},
+                    elif chunk_type == "code":
+                        # Code block from Open Interpreter - emit as tool_use
+                        language = metadata.get("language", "code")
+                        await self.bus.publish_system(
+                            SystemEvent(
+                                event_type="tool_start",
+                                data={
+                                    "name": f"run_{language}",
+                                    "params": {"code": content[:100]},
+                                },
+                            )
                         )
-                    )
-                    # Also stream to user
-                    code_block = f"\n```{language}\n{content}\n```\n"
-                    full_response += code_block
-                    await self.bus.publish_outbound(
-                        OutboundMessage(
-                            channel=message.channel,
-                            chat_id=message.chat_id,
-                            content=code_block,
-                            is_stream_chunk=True,
+                        # Also stream to user
+                        code_block = f"\n```{language}\n{content}\n```\n"
+                        full_response += code_block
+                        await self.bus.publish_outbound(
+                            OutboundMessage(
+                                channel=message.channel,
+                                chat_id=message.chat_id,
+                                content=code_block,
+                                is_stream_chunk=True,
+                            )
                         )
-                    )
 
-                elif chunk_type == "output":
-                    # Output from code execution - emit as tool_result
-                    await self.bus.publish_system(
-                        SystemEvent(
-                            event_type="tool_result",
-                            data={
-                                "name": "code_execution",
-                                "result": content[:200],
-                                "status": "success",
-                            },
+                    elif chunk_type == "output":
+                        # Output from code execution - emit as tool_result
+                        await self.bus.publish_system(
+                            SystemEvent(
+                                event_type="tool_result",
+                                data={
+                                    "name": "code_execution",
+                                    "result": content[:200],
+                                    "status": "success",
+                                },
+                            )
                         )
-                    )
-                    # Also stream to user
-                    output_block = f"\n```output\n{content}\n```\n"
-                    full_response += output_block
-                    await self.bus.publish_outbound(
-                        OutboundMessage(
-                            channel=message.channel,
-                            chat_id=message.chat_id,
-                            content=output_block,
-                            is_stream_chunk=True,
+                        # Also stream to user
+                        output_block = f"\n```output\n{content}\n```\n"
+                        full_response += output_block
+                        await self.bus.publish_outbound(
+                            OutboundMessage(
+                                channel=message.channel,
+                                chat_id=message.chat_id,
+                                content=output_block,
+                                is_stream_chunk=True,
+                            )
                         )
-                    )
 
-                elif chunk_type == "thinking":
-                    # Thinking goes to Activity panel only — NOT to OutboundMessage
-                    await self.bus.publish_system(
-                        SystemEvent(
-                            event_type="thinking",
-                            data={"content": content, "session_key": session_key},
+                    elif chunk_type == "thinking":
+                        # Thinking goes to Activity panel only
+                        await self.bus.publish_system(
+                            SystemEvent(
+                                event_type="thinking",
+                                data={"content": content, "session_key": session_key},
+                            )
                         )
-                    )
 
-                elif chunk_type == "thinking_done":
-                    await self.bus.publish_system(
-                        SystemEvent(
-                            event_type="thinking_done",
-                            data={"session_key": session_key},
+                    elif chunk_type == "thinking_done":
+                        await self.bus.publish_system(
+                            SystemEvent(
+                                event_type="thinking_done",
+                                data={"session_key": session_key},
+                            )
                         )
-                    )
 
-                elif chunk_type == "tool_use":
-                    # Emit tool_start system event for Activity panel
-                    tool_name = metadata.get("name") or metadata.get("tool", "unknown")
-                    tool_input = metadata.get("input") or metadata
-                    await self.bus.publish_system(
-                        SystemEvent(
-                            event_type="tool_start", data={"name": tool_name, "params": tool_input}
+                    elif chunk_type == "tool_use":
+                        # Emit tool_start system event for Activity panel
+                        tool_name = metadata.get("name") or metadata.get("tool", "unknown")
+                        tool_input = metadata.get("input") or metadata
+                        await self.bus.publish_system(
+                            SystemEvent(
+                                event_type="tool_start",
+                                data={"name": tool_name, "params": tool_input},
+                            )
                         )
-                    )
 
-                elif chunk_type == "tool_result":
-                    # Emit tool_result system event for Activity panel
-                    tool_name = metadata.get("name") or metadata.get("tool", "unknown")
-                    await self.bus.publish_system(
-                        SystemEvent(
-                            event_type="tool_result",
-                            data={
-                                "name": tool_name,
-                                "result": content[:200],  # Truncate for display
-                                "status": "success",
-                            },
+                    elif chunk_type == "tool_result":
+                        # Emit tool_result system event for Activity panel
+                        tool_name = metadata.get("name") or metadata.get("tool", "unknown")
+                        await self.bus.publish_system(
+                            SystemEvent(
+                                event_type="tool_result",
+                                data={
+                                    "name": tool_name,
+                                    "result": content[:200],
+                                    "status": "success",
+                                },
+                            )
                         )
-                    )
 
-                elif chunk_type == "error":
-                    # Emit error and send to user
-                    await self.bus.publish_system(
-                        SystemEvent(
-                            event_type="tool_result",
-                            data={"name": "agent", "result": content, "status": "error"},
+                    elif chunk_type == "error":
+                        # Emit error and send to user
+                        await self.bus.publish_system(
+                            SystemEvent(
+                                event_type="tool_result",
+                                data={
+                                    "name": "agent",
+                                    "result": content,
+                                    "status": "error",
+                                },
+                            )
                         )
-                    )
-                    await self.bus.publish_outbound(
-                        OutboundMessage(
-                            channel=message.channel,
-                            chat_id=message.chat_id,
-                            content=content,
-                            is_stream_chunk=True,
+                        await self.bus.publish_outbound(
+                            OutboundMessage(
+                                channel=message.channel,
+                                chat_id=message.chat_id,
+                                content=content,
+                                is_stream_chunk=True,
+                            )
                         )
-                    )
 
-                elif chunk_type == "done":
-                    # Agent finished - will send stream_end below
-                    pass
+                    elif chunk_type == "done":
+                        # Agent finished - will send stream_end below
+                        pass
+            finally:
+                # Always close the async generator to kill any subprocess
+                await run_iter.aclose()
 
             # 4. Send stream end marker
             await self.bus.publish_outbound(
                 OutboundMessage(
-                    channel=message.channel, chat_id=message.chat_id, content="", is_stream_end=True
+                    channel=message.channel,
+                    chat_id=message.chat_id,
+                    content="",
+                    is_stream_end=True,
                 )
             )
 
@@ -326,34 +349,57 @@ class AgentLoop:
                 # 6. Auto-learn: extract facts from conversation (non-blocking)
                 should_auto_learn = (
                     self.settings.memory_backend == "mem0" and self.settings.mem0_auto_learn
-                ) or (self.settings.memory_backend == "file" and self.settings.file_auto_learn)
+                ) or (
+                    self.settings.memory_backend == "file" and self.settings.file_auto_learn
+                )
                 if should_auto_learn:
                     asyncio.create_task(
                         self._auto_learn(message.content, full_response, session_key)
                     )
 
         except TimeoutError:
-            logger.error("Agent backend timed out (no response within 120s)")
+            logger.error("Agent backend timed out")
+            # Kill the hung backend so it releases resources
+            try:
+                await router.stop()
+            except Exception:
+                pass
+            # Force router re-init on next message
+            self._router = None
+
             await self.bus.publish_outbound(
                 OutboundMessage(
                     channel=message.channel,
                     chat_id=message.chat_id,
                     content=(
-                        "Request timed out — the agent backend didn't respond. "
-                        "Check that Claude Code CLI is installed and your API key "
-                        "is valid in Settings → API Keys."
+                        "Request timed out — the agent backend didn't respond.\n\n"
+                        "**Possible causes:**\n"
+                        "- Claude Code CLI is not installed "
+                        "(`npm install -g @anthropic-ai/claude-code`)\n"
+                        "- API key is missing or invalid "
+                        "(check Settings → API Keys)\n"
+                        "- Try switching to **PocketPaw Native** backend "
+                        "in Settings → General"
                     ),
                     is_stream_chunk=True,
                 )
             )
             await self.bus.publish_outbound(
                 OutboundMessage(
-                    channel=message.channel, chat_id=message.chat_id, content="", is_stream_end=True
+                    channel=message.channel,
+                    chat_id=message.chat_id,
+                    content="",
+                    is_stream_end=True,
                 )
             )
         except Exception as e:
             logger.exception(f"❌ Error processing message: {e}")
-            # Send error message
+            # Kill the backend on error
+            try:
+                await router.stop()
+            except Exception:
+                pass
+
             await self.bus.publish_outbound(
                 OutboundMessage(
                     channel=message.channel,
@@ -361,10 +407,12 @@ class AgentLoop:
                     content=f"An error occurred: {str(e)}",
                 )
             )
-            # Send stream end on error
             await self.bus.publish_outbound(
                 OutboundMessage(
-                    channel=message.channel, chat_id=message.chat_id, content="", is_stream_end=True
+                    channel=message.channel,
+                    chat_id=message.chat_id,
+                    content="",
+                    is_stream_end=True,
                 )
             )
 
