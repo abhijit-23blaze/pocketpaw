@@ -86,6 +86,7 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 
+
 @app.middleware("http")
 async def security_headers_middleware(request: Request, call_next):
     """Add security headers to all responses."""
@@ -1261,9 +1262,7 @@ async def auth_middleware(request: Request, call_next):
     # 2. Check Header
     elif auth_header:
         bearer_value = (
-            auth_header.removeprefix("Bearer ").strip()
-            if auth_header.startswith("Bearer ")
-            else ""
+            auth_header.removeprefix("Bearer ").strip() if auth_header.startswith("Bearer ") else ""
         )
         if bearer_value == current_token:
             is_valid = True
@@ -1303,9 +1302,7 @@ async def exchange_session_token(request: Request):
     """
     auth_header = request.headers.get("Authorization", "")
     bearer = (
-        auth_header.removeprefix("Bearer ").strip()
-        if auth_header.startswith("Bearer ")
-        else ""
+        auth_header.removeprefix("Bearer ").strip() if auth_header.startswith("Bearer ") else ""
     )
     master = get_access_token()
     if bearer != master:
@@ -1576,9 +1573,7 @@ async def websocket_endpoint(
         await websocket.accept()
         try:
             first_msg = await asyncio.wait_for(websocket.receive_json(), timeout=5.0)
-            if first_msg.get("action") == "authenticate" and _token_valid(
-                first_msg.get("token")
-            ):
+            if first_msg.get("action") == "authenticate" and _token_valid(first_msg.get("token")):
                 pass  # Authenticated
             else:
                 await websocket.close(code=4003, reason="Unauthorized")
@@ -2094,8 +2089,17 @@ async def websocket_endpoint(
                 skill = loader.get(skill_name)
 
                 if not skill:
+                    available = [s.name for s in loader.get_invocable()]
+                    hint = (
+                        f"Available commands: /{', /'.join(available)}"
+                        if available
+                        else "No skills installed yet."
+                    )
                     await websocket.send_json(
-                        {"type": "error", "content": f"Skill not found: {skill_name}"}
+                        {
+                            "type": "error",
+                            "content": f"Unknown command: /{skill_name}\n\n{hint}",
+                        }
                     )
                 else:
                     await websocket.send_json(

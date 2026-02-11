@@ -463,7 +463,24 @@ class ClaudeAgentSDK:
         if not self._sdk_available:
             yield AgentEvent(
                 type="error",
-                content="❌ Claude Agent SDK not available.\n\nInstall with: pip install claude-agent-sdk\n\nNote: Requires Claude Code CLI to be installed.",
+                content=(
+                    "❌ Claude Code CLI not found.\n\n"
+                    "Install with: npm install -g @anthropic-ai/claude-code\n\n"
+                    "Or switch to a different backend in **Settings → General**."
+                ),
+            )
+            return
+
+        # Quick pre-flight: check if API key is available
+        import os
+
+        if not os.environ.get("ANTHROPIC_API_KEY") and not self.settings.anthropic_api_key:
+            yield AgentEvent(
+                type="error",
+                content=(
+                    "❌ No Anthropic API key found.\n\n"
+                    "Open **Settings → API Keys** in the sidebar to add your key."
+                ),
             )
             return
 
@@ -661,12 +678,21 @@ class ClaudeAgentSDK:
             if "CLINotFoundError" in error_msg or "not found" in error_msg.lower():
                 yield AgentEvent(
                     type="error",
-                    content="❌ Claude Code CLI not found.\n\nInstall with: npm install -g @anthropic-ai/claude-code",
+                    content=(
+                        "❌ Claude Code CLI not found.\n\n"
+                        "Install with: npm install -g @anthropic-ai/claude-code\n\n"
+                        "Or switch to a different backend in "
+                        "**Settings → General**."
+                    ),
                 )
             elif "API key" in error_msg.lower() or "authentication" in error_msg.lower():
                 yield AgentEvent(
                     type="error",
-                    content="❌ Anthropic API key not configured.\n\nSet ANTHROPIC_API_KEY environment variable.",
+                    content=(
+                        "❌ Anthropic API key not configured.\n\n"
+                        "Open **Settings → API Keys** in the sidebar "
+                        "to add your key."
+                    ),
                 )
             else:
                 yield AgentEvent(type="error", content=f"❌ Agent error: {error_msg}")

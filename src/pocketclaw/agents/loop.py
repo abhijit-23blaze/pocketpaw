@@ -28,6 +28,16 @@ from pocketclaw.security.injection_scanner import ThreatLevel, get_injection_sca
 logger = logging.getLogger(__name__)
 
 
+async def _iter_with_timeout(aiter, timeout=120):
+    """Yield items from an async iterator with a per-item timeout."""
+    ait = aiter.__aiter__()
+    while True:
+        try:
+            yield await asyncio.wait_for(ait.__anext__(), timeout=timeout)
+        except StopAsyncIteration:
+            break
+
+
 class AgentLoop:
     """
     Main agent execution loop.
@@ -175,7 +185,8 @@ class AgentLoop:
             router = self._get_router()
             full_response = ""
 
-            async for chunk in router.run(content, system_prompt=system_prompt, history=history):
+            run_iter = router.run(content, system_prompt=system_prompt, history=history)
+            async for chunk in _iter_with_timeout(run_iter, timeout=120):
                 chunk_type = chunk.get("type", "")
                 content = chunk.get("content", "")
                 metadata = chunk.get("metadata") or {}
@@ -321,6 +332,25 @@ class AgentLoop:
                         self._auto_learn(message.content, full_response, session_key)
                     )
 
+        except TimeoutError:
+            logger.error("Agent backend timed out (no response within 120s)")
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel=message.channel,
+                    chat_id=message.chat_id,
+                    content=(
+                        "Request timed out — the agent backend didn't respond. "
+                        "Check that Claude Code CLI is installed and your API key "
+                        "is valid in Settings → API Keys."
+                    ),
+                    is_stream_chunk=True,
+                )
+            )
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel=message.channel, chat_id=message.chat_id, content="", is_stream_end=True
+                )
+            )
         except Exception as e:
             logger.exception(f"❌ Error processing message: {e}")
             # Send error message
