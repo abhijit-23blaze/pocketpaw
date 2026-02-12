@@ -16,11 +16,21 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/pocketpaw/pocketpaw/releases/latest/download/PocketPaw-macOS-arm64.dmg"><img src="https://img.shields.io/badge/macOS-Download_.dmg-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS"></a>
+  &nbsp;
+  <a href="https://github.com/pocketpaw/pocketpaw/releases/latest/download/PocketPaw-Setup.exe"><img src="https://img.shields.io/badge/Windows-Download_.exe-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Download for Windows"></a>
+</p>
+
+<p align="center">
   Self-hosted, multi-agent AI platform. Web dashboard + <strong>Discord</strong>, <strong>Slack</strong>, <strong>WhatsApp</strong>, <strong>Telegram</strong>, and more.<br>
   No subscription. No cloud lock-in. Just you and your Paw.
 </p>
 
 > **🚧 Beta:** This project is under active development. Expect breaking changes between versions.
+
+<p align="center">
+  <video src="https://github.com/pocketpaw/pocketpaw/raw/main/paw-intro-4.mp4" width="700" controls></video>
+</p>
 
 ---
 
