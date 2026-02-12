@@ -2,6 +2,9 @@
  * PocketPaw Main Application
  * Alpine.js component for the dashboard
  *
+ * Changes (2026-02-12):
+ * - Call initHashRouter() in init() for hash-based URL routing
+ *
  * Changes (2026-02-05):
  * - MAJOR REFACTOR: Componentized into feature modules using mixin pattern
  * - Extracted features to js/features/: chat, file-browser, reminders, intentions,
@@ -198,6 +201,9 @@ function app() {
                     this.cancelRenameSession();
                 }
             });
+
+            // Initialize hash-based URL routing
+            this.initHashRouter();
 
             // Refresh Lucide icons after initial render
             this.$nextTick(() => {

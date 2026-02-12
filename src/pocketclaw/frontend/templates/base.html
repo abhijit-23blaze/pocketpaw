@@ -1,6 +1,11 @@
 <!--
   PocketPaw Dashboard - Base Template
 
+  Changes (2026-02-12):
+  - Added hash-router.js and project-browser.js feature module script tags
+  - Updated top bar view buttons to call navigateToView() for hash routing
+  - Hash-based URL routing: #/chat, #/activity, #/terminal, #/crew, #/project/{id}
+
   Changes (2026-02-05):
   - MAJOR REFACTOR: Componentized JS using mixin pattern
   - Added feature module scripts: chat, file-browser, reminders, intentions,
@@ -94,28 +99,28 @@
             <button
                 class="px-4 md:px-6 py-1.5 rounded-[7px] text-[13px] font-medium transition-all"
                 :class="view === 'chat' ? 'bg-[#636366]/80 text-white shadow-sm' : 'text-[var(--text-secondary)] hover:text-white'"
-                @click="view = 'chat'"
+                @click="navigateToView('chat')"
             >
                 Chat
             </button>
             <button
                 class="px-4 md:px-6 py-1.5 rounded-[7px] text-[13px] font-medium transition-all"
                 :class="view === 'activity' ? 'bg-[#636366]/80 text-white shadow-sm' : 'text-[var(--text-secondary)] hover:text-white'"
-                @click="view = 'activity'"
+                @click="navigateToView('activity')"
             >
                 Activity
             </button>
             <button
                 class="px-4 md:px-6 py-1.5 rounded-[7px] text-[13px] font-medium transition-all hidden sm:block"
                 :class="view === 'terminal' ? 'bg-[#636366]/80 text-white shadow-sm' : 'text-[var(--text-secondary)] hover:text-white'"
-                @click="view = 'terminal'"
+                @click="navigateToView('terminal')"
             >
                 Terminal
             </button>
             <button
                 class="px-4 md:px-6 py-1.5 rounded-[7px] text-[13px] font-medium transition-all flex items-center gap-1.5 hidden sm:flex"
                 :class="view === 'missions' ? 'bg-[#636366]/80 text-white shadow-sm' : 'text-[var(--text-secondary)] hover:text-white'"
-                @click="view = 'missions'; loadMCData()"
+                @click="navigateToView('missions')"
             >
                 <span class="relative flex h-2 w-2" x-show="missionControl.stats.active_tasks > 0">
                     <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent opacity-75"></span>
@@ -168,6 +173,8 @@
     <script src="/static/js/features/mission-control.js?v={{ v }}"></script>
     <script src="/static/js/features/channels.js?v={{ v }}"></script>
     <script src="/static/js/features/mcp.js?v={{ v }}"></script>
+    <script src="/static/js/features/hash-router.js?v={{ v }}"></script>
+    <script src="/static/js/features/project-browser.js?v={{ v }}"></script>
     <!-- Main app (assembles features) -->
     <script src="/static/js/app.js?v={{ v }}"></script>
 

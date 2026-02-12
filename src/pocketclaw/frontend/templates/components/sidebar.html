@@ -1,7 +1,13 @@
 <!--
   PocketPaw Dashboard - Sidebar Component
 
-  Redesigned: 2026-02-10
+  Updated: 2026-02-12
+  - Replaced flat project cards with inline expandable file tree per project
+  - Chevron toggle expands/collapses file tree; title click navigates to Crew view
+  - Subdirectories expandable to 2 levels; deeper opens file browser modal
+  - Hash-based URL routing integration via navigateToProject()
+
+  Previous: 2026-02-10
   - Session-aware chat sidebar with grouped session list
   - New Chat button + search input
   - Collapsible Tools & Config section at bottom
@@ -21,93 +27,278 @@
     </button>
   </div>
 
-  <!-- New Chat + Search -->
-  <div class="flex flex-col gap-2 px-1 mb-3 shrink-0">
+  <!-- Tab Switcher: Chats / Projects -->
+  <div class="flex bg-white/5 rounded-lg p-0.5 mb-3 shrink-0 mx-1">
     <button
-        class="flex items-center justify-center gap-2 w-full py-2 px-3 rounded-xl bg-accent/15 hover:bg-accent/25 text-accent text-sm font-medium transition-colors border border-accent/20"
-        @click="createNewChat()"
+        class="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-md text-xs font-medium transition-all"
+        :class="sidebarTab === 'chats' ? 'bg-white/10 text-white shadow-sm' : 'text-white/40 hover:text-white/60'"
+        @click="switchSidebarTab('chats')"
     >
-      <i data-lucide="plus" class="w-4 h-4"></i>
-      <span>New Chat</span>
+      <i data-lucide="message-square" class="w-3.5 h-3.5"></i>
+      Chats
     </button>
-    <div class="relative">
-      <i data-lucide="search" class="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/30"></i>
-      <input
-          type="text"
-          x-model="sessionSearch"
-          class="session-search-input w-full py-1.5 pl-8 pr-3 rounded-lg bg-white/5 border border-white/8 text-sm text-white placeholder-white/30 focus:outline-none focus:border-accent/40 transition-colors"
-          placeholder="Search sessions..."
-      />
-    </div>
+    <button
+        class="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-md text-xs font-medium transition-all"
+        :class="sidebarTab === 'projects' ? 'bg-white/10 text-white shadow-sm' : 'text-white/40 hover:text-white/60'"
+        @click="switchSidebarTab('projects')"
+    >
+      <i data-lucide="folder-kanban" class="w-3.5 h-3.5"></i>
+      Projects
+      <span x-show="sidebarProjects.length > 0" class="text-[10px] bg-accent/20 text-accent px-1 rounded-full" x-text="sidebarProjects.length"></span>
+    </button>
   </div>
 
-  <!-- Session List (scrollable, flex-1) -->
-  <div class="flex-1 overflow-y-auto min-h-0 px-1 -mx-1" style="scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.1) transparent;">
-    <template x-if="sessionsLoading">
-      <div class="flex items-center justify-center py-8 text-white/30 text-sm">
-        <i data-lucide="loader-2" class="w-4 h-4 animate-spin mr-2"></i> Loading...
+  <!-- ====== CHATS TAB ====== -->
+  <template x-if="sidebarTab === 'chats'">
+    <div class="flex flex-col flex-1 min-h-0">
+      <!-- New Chat + Search -->
+      <div class="flex flex-col gap-2 px-1 mb-3 shrink-0">
+        <button
+            class="flex items-center justify-center gap-2 w-full py-2 px-3 rounded-xl bg-accent/15 hover:bg-accent/25 text-accent text-sm font-medium transition-colors border border-accent/20"
+            @click="createNewChat()"
+        >
+          <i data-lucide="plus" class="w-4 h-4"></i>
+          <span>New Chat</span>
+        </button>
+        <div class="relative">
+          <i data-lucide="search" class="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/30"></i>
+          <input
+              type="text"
+              x-model="sessionSearch"
+              class="session-search-input w-full py-1.5 pl-8 pr-3 rounded-lg bg-white/5 border border-white/8 text-sm text-white placeholder-white/30 focus:outline-none focus:border-accent/40 transition-colors"
+              placeholder="Search sessions..."
+          />
+        </div>
       </div>
-    </template>
 
-    <template x-if="!sessionsLoading && sessions.length === 0">
-      <div class="flex flex-col items-center justify-center py-8 text-white/30 text-sm gap-2">
-        <i data-lucide="message-square-dashed" class="w-8 h-8 opacity-50"></i>
-        <span>No conversations yet</span>
-      </div>
-    </template>
-
-    <template x-for="group in getGroupedSessions()" :key="group.label">
-      <div class="mb-3">
-        <h4 class="text-[10px] uppercase tracking-wider text-white/30 font-semibold mb-1.5 px-2" x-text="group.label"></h4>
-        <template x-for="session in group.sessions" :key="session.id">
-          <button
-              class="group w-full text-left px-2.5 py-2 rounded-lg transition-all mb-0.5 border border-transparent"
-              :class="currentSessionId === session.id
-                  ? 'bg-accent/15 border-accent/20 text-white'
-                  : 'text-white/70 hover:bg-white/5 hover:text-white'"
-              @click="selectSession(session.id)"
-              @dblclick="startRenameSession(session.id, session.title, $event)"
-          >
-            <div class="flex items-start gap-2">
-              <!-- Channel icon -->
-              <i :data-lucide="getChannelIcon(session.channel)" class="w-3.5 h-3.5 mt-0.5 shrink-0 opacity-50"></i>
-
-              <div class="flex-1 min-w-0">
-                <!-- Title or inline rename -->
-                <template x-if="editingSessionId === session.id">
-                  <input
-                      type="text"
-                      x-model="editingSessionTitle"
-                      class="session-rename-input w-full bg-white/10 border border-accent/40 rounded px-1.5 py-0.5 text-xs text-white focus:outline-none"
-                      @keydown.enter="saveRenameSession(session.id)"
-                      @keydown.escape="cancelRenameSession()"
-                      @blur="saveRenameSession(session.id)"
-                      @click.stop
-                  />
-                </template>
-                <template x-if="editingSessionId !== session.id">
-                  <div class="text-[13px] font-medium truncate leading-tight" x-text="session.title || 'New Chat'"></div>
-                </template>
-                <div class="text-[11px] text-white/30 truncate mt-0.5 leading-tight" x-text="session.preview || ''"></div>
-              </div>
-
-              <!-- Delete button (hover) -->
-              <button
-                  class="shrink-0 opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-white/10 transition-all"
-                  @click="deleteSession(session.id, $event)"
-                  title="Delete"
-              >
-                <i data-lucide="x" class="w-3 h-3 text-white/40 hover:text-danger"></i>
-              </button>
-            </div>
-          </button>
+      <!-- Session List (scrollable, flex-1) -->
+      <div class="flex-1 overflow-y-auto min-h-0 px-1 -mx-1" style="scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.1) transparent;">
+        <template x-if="sessionsLoading">
+          <div class="flex items-center justify-center py-8 text-white/30 text-sm">
+            <i data-lucide="loader-2" class="w-4 h-4 animate-spin mr-2"></i> Loading...
+          </div>
         </template>
-      </div>
-    </template>
 
-    <!-- Refresh icons after sessions render -->
-    <div x-effect="sessions.length; $nextTick(() => { if (window.refreshIcons) window.refreshIcons(); })"></div>
-  </div>
+        <template x-if="!sessionsLoading && sessions.length === 0">
+          <div class="flex flex-col items-center justify-center py-8 text-white/30 text-sm gap-2">
+            <i data-lucide="message-square-dashed" class="w-8 h-8 opacity-50"></i>
+            <span>No conversations yet</span>
+          </div>
+        </template>
+
+        <template x-for="group in getGroupedSessions()" :key="group.label">
+          <div class="mb-3">
+            <h4 class="text-[10px] uppercase tracking-wider text-white/30 font-semibold mb-1.5 px-2" x-text="group.label"></h4>
+            <template x-for="session in group.sessions" :key="session.id">
+              <button
+                  class="group w-full text-left px-2.5 py-2 rounded-lg transition-all mb-0.5 border border-transparent"
+                  :class="currentSessionId === session.id
+                      ? 'bg-accent/15 border-accent/20 text-white'
+                      : 'text-white/70 hover:bg-white/5 hover:text-white'"
+                  @click="selectSession(session.id)"
+                  @dblclick="startRenameSession(session.id, session.title, $event)"
+              >
+                <div class="flex items-start gap-2">
+                  <!-- Channel icon -->
+                  <i :data-lucide="getChannelIcon(session.channel)" class="w-3.5 h-3.5 mt-0.5 shrink-0 opacity-50"></i>
+
+                  <div class="flex-1 min-w-0">
+                    <!-- Title or inline rename -->
+                    <template x-if="editingSessionId === session.id">
+                      <input
+                          type="text"
+                          x-model="editingSessionTitle"
+                          class="session-rename-input w-full bg-white/10 border border-accent/40 rounded px-1.5 py-0.5 text-xs text-white focus:outline-none"
+                          @keydown.enter="saveRenameSession(session.id)"
+                          @keydown.escape="cancelRenameSession()"
+                          @blur="saveRenameSession(session.id)"
+                          @click.stop
+                      />
+                    </template>
+                    <template x-if="editingSessionId !== session.id">
+                      <div class="text-[13px] font-medium truncate leading-tight" x-text="session.title || 'New Chat'"></div>
+                    </template>
+                    <div class="text-[11px] text-white/30 truncate mt-0.5 leading-tight" x-text="session.preview || ''"></div>
+                  </div>
+
+                  <!-- Delete button (hover) -->
+                  <button
+                      class="shrink-0 opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-white/10 transition-all"
+                      @click="deleteSession(session.id, $event)"
+                      title="Delete"
+                  >
+                    <i data-lucide="x" class="w-3 h-3 text-white/40 hover:text-danger"></i>
+                  </button>
+                </div>
+              </button>
+            </template>
+          </div>
+        </template>
+
+        <!-- Refresh icons after sessions render -->
+        <div x-effect="sessions.length; $nextTick(() => { if (window.refreshIcons) window.refreshIcons(); })"></div>
+      </div>
+    </div>
+  </template>
+
+  <!-- ====== PROJECTS TAB ====== -->
+  <template x-if="sidebarTab === 'projects'">
+    <div class="flex flex-col flex-1 min-h-0">
+      <!-- Project Search -->
+      <div class="px-1 mb-3 shrink-0">
+        <div class="relative">
+          <i data-lucide="search" class="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/30"></i>
+          <input
+              type="text"
+              x-model="sidebarProjectSearch"
+              class="w-full py-1.5 pl-8 pr-3 rounded-lg bg-white/5 border border-white/8 text-sm text-white placeholder-white/30 focus:outline-none focus:border-accent/40 transition-colors"
+              placeholder="Search projects..."
+          />
+        </div>
+      </div>
+
+      <!-- Project List (scrollable) -->
+      <div class="flex-1 overflow-y-auto min-h-0 px-1 -mx-1" style="scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.1) transparent;">
+        <!-- Loading state -->
+        <template x-if="sidebarProjectsLoading">
+          <div class="flex items-center justify-center py-8 text-white/30 text-sm">
+            <i data-lucide="loader-2" class="w-4 h-4 animate-spin mr-2"></i> Loading...
+          </div>
+        </template>
+
+        <!-- Empty state -->
+        <template x-if="!sidebarProjectsLoading && sidebarProjects.length === 0">
+          <div class="flex flex-col items-center justify-center py-8 text-white/30 text-sm gap-2">
+            <i data-lucide="folder-kanban" class="w-8 h-8 opacity-50"></i>
+            <span>No projects yet</span>
+            <span class="text-[11px]">Create one from the Crew tab</span>
+          </div>
+        </template>
+
+        <!-- Project list with inline file trees -->
+        <template x-if="!sidebarProjectsLoading && sidebarProjects.length > 0">
+          <div class="flex flex-col gap-0.5">
+            <template x-for="project in getFilteredSidebarProjects()" :key="project.id">
+              <div>
+                <!-- Project row: chevron + status dot + title -->
+                <div class="group flex items-center gap-1.5 px-1.5 py-1.5 rounded-lg transition-all hover:bg-white/5">
+                  <!-- Chevron toggle for file tree -->
+                  <button
+                      class="shrink-0 p-0.5 rounded hover:bg-white/10 transition-colors"
+                      @click.stop="toggleProjectTree(project)"
+                  >
+                    <i
+                        :data-lucide="isProjectTreeExpanded(project.id) ? 'chevron-down' : 'chevron-right'"
+                        class="w-3 h-3 text-white/30 transition-transform"
+                    ></i>
+                  </button>
+
+                  <!-- Status dot -->
+                  <span class="w-2 h-2 rounded-full shrink-0" :class="getSidebarStatusDot(project.status)"></span>
+
+                  <!-- Title (click navigates to Crew/project) -->
+                  <button
+                      class="flex-1 min-w-0 text-left"
+                      @click="navigateToProject(project)"
+                  >
+                    <div class="text-[13px] font-medium truncate leading-tight text-white/80 hover:text-white transition-colors" x-text="project.title"></div>
+                  </button>
+
+                  <!-- File count badge -->
+                  <span x-show="project.file_count > 0" class="text-[10px] text-white/25 shrink-0 tabular-nums" x-text="project.file_count + 'f'"></span>
+                </div>
+
+                <!-- Inline file tree (expanded) -->
+                <template x-if="isProjectTreeExpanded(project.id)">
+                  <div class="ml-5 border-l border-white/8 pl-2 mb-1">
+                    <!-- Loading indicator -->
+                    <template x-if="isProjectDirLoading(project.id, '.pocketclaw/projects/' + project.id)">
+                      <div class="flex items-center gap-1.5 py-1 text-white/30 text-[11px]">
+                        <i data-lucide="loader-2" class="w-3 h-3 animate-spin"></i> Loading...
+                      </div>
+                    </template>
+
+                    <!-- Root files -->
+                    <template x-for="item in getProjectTreeItems(project.id, '.pocketclaw/projects/' + project.id)" :key="item.name">
+                      <div>
+                        <!-- Directory item -->
+                        <template x-if="item.isDir">
+                          <div>
+                            <button
+                                class="flex items-center gap-1.5 w-full px-1 py-0.5 rounded text-left text-[12px] text-white/60 hover:text-white/90 hover:bg-white/5 transition-colors"
+                                @click="toggleProjectDir(project.id, '.pocketclaw/projects/' + project.id + '/' + item.name)"
+                            >
+                              <i
+                                  :data-lucide="isProjectDirExpanded(project.id, '.pocketclaw/projects/' + project.id + '/' + item.name) ? 'chevron-down' : 'chevron-right'"
+                                  class="w-2.5 h-2.5 text-white/30 shrink-0"
+                              ></i>
+                              <i data-lucide="folder" class="w-3 h-3 text-amber-400/70 shrink-0"></i>
+                              <span class="truncate" x-text="item.name"></span>
+                            </button>
+
+                            <!-- Subdirectory loading -->
+                            <template x-if="isProjectDirLoading(project.id, '.pocketclaw/projects/' + project.id + '/' + item.name)">
+                              <div class="ml-5 flex items-center gap-1 py-0.5 text-white/30 text-[11px]">
+                                <i data-lucide="loader-2" class="w-2.5 h-2.5 animate-spin"></i>
+                              </div>
+                            </template>
+
+                            <!-- Subdirectory files (level 2) -->
+                            <template x-if="isProjectDirExpanded(project.id, '.pocketclaw/projects/' + project.id + '/' + item.name)">
+                              <div class="ml-4 border-l border-white/5 pl-1.5">
+                                <template x-for="sub in getProjectTreeItems(project.id, '.pocketclaw/projects/' + project.id + '/' + item.name)" :key="sub.name">
+                                  <button
+                                      class="flex items-center gap-1.5 w-full px-1 py-0.5 rounded text-left text-[11px] transition-colors"
+                                      :class="sub.isDir ? 'text-white/60 hover:text-white/90 hover:bg-white/5' : 'text-white/50 hover:text-white/80 hover:bg-white/5'"
+                                      @click="sub.isDir
+                                          ? openFileInBrowser(project.id, '.pocketclaw/projects/' + project.id + '/' + item.name + '/' + sub.name)
+                                          : openFileInBrowser(project.id, '.pocketclaw/projects/' + project.id + '/' + item.name)"
+                                  >
+                                    <i
+                                        :data-lucide="sub.isDir ? 'folder' : getFileIcon(sub.name)"
+                                        class="w-2.5 h-2.5 shrink-0"
+                                        :class="sub.isDir ? 'text-amber-400/60' : 'text-white/30'"
+                                    ></i>
+                                    <span class="truncate" x-text="sub.name"></span>
+                                    <span x-show="sub.size" class="ml-auto text-[10px] text-white/20 shrink-0 tabular-nums" x-text="sub.size"></span>
+                                  </button>
+                                </template>
+                              </div>
+                            </template>
+                          </div>
+                        </template>
+
+                        <!-- File item -->
+                        <template x-if="!item.isDir">
+                          <button
+                              class="flex items-center gap-1.5 w-full px-1 py-0.5 rounded text-left text-[12px] text-white/50 hover:text-white/80 hover:bg-white/5 transition-colors"
+                              @click="openFileInBrowser(project.id, '.pocketclaw/projects/' + project.id)"
+                          >
+                            <span class="w-2.5"></span>
+                            <i :data-lucide="getFileIcon(item.name)" class="w-3 h-3 text-white/30 shrink-0"></i>
+                            <span class="truncate" x-text="item.name"></span>
+                            <span x-show="item.size" class="ml-auto text-[10px] text-white/20 shrink-0 tabular-nums" x-text="item.size"></span>
+                          </button>
+                        </template>
+                      </div>
+                    </template>
+
+                    <!-- Empty directory -->
+                    <template x-if="!isProjectDirLoading(project.id, '.pocketclaw/projects/' + project.id) && getProjectTreeItems(project.id, '.pocketclaw/projects/' + project.id).length === 0">
+                      <div class="text-[11px] text-white/25 py-1 px-1 italic">No files</div>
+                    </template>
+                  </div>
+                </template>
+              </div>
+            </template>
+          </div>
+        </template>
+
+        <!-- Refresh icons -->
+        <div x-effect="sidebarProjects.length; $nextTick(() => { if (window.refreshIcons) window.refreshIcons(); })"></div>
+      </div>
+    </div>
+  </template>
 
   <!-- Bottom: Collapsible Tools & Config -->
   <div class="shrink-0 border-t border-white/8 pt-2 mt-2">

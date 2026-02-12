@@ -2,11 +2,12 @@
   PocketPaw - Crew Stats Bar Component
 
   Created: 2026-02-05
-  Updated: 2026-02-12 — Added Tasks/Projects sub-tab switcher, project count
-    stat, "New Project" button, and planning progress banner.
+  Updated: 2026-02-12 — Sub-tab switcher now calls updateHash() for hash routing.
+    Added Tasks/Projects sub-tab switcher, project count stat, "New Project"
+    button, and planning progress banner.
 
   Features:
-  - Sub-tab switcher (Tasks / Projects)
+  - Sub-tab switcher (Tasks / Projects) with hash routing
   - Live indicator
   - Agent/task/project/completion stats
   - New Task/Agent/Project buttons
@@ -22,12 +23,12 @@
             <button
                 class="px-3 py-1 rounded-md text-xs font-medium transition-all"
                 :class="missionControl.crewTab === 'tasks' ? 'bg-white/10 text-white' : 'text-white/40 hover:text-white/70'"
-                @click="missionControl.crewTab = 'tasks'"
+                @click="missionControl.crewTab = 'tasks'; updateHash('#/crew')"
             >Tasks</button>
             <button
                 class="px-3 py-1 rounded-md text-xs font-medium transition-all flex items-center gap-1.5"
                 :class="missionControl.crewTab === 'projects' ? 'bg-white/10 text-white' : 'text-white/40 hover:text-white/70'"
-                @click="missionControl.crewTab = 'projects'; loadProjects()"
+                @click="missionControl.crewTab = 'projects'; loadProjects(); updateHash('#/crew/projects')"
             >
                 <i data-lucide="layers" class="w-3 h-3"></i>
                 Projects

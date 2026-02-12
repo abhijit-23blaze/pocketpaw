@@ -1,7 +1,9 @@
 """Mission Control API endpoints.
 
 Created: 2026-02-05
-Updated: 2026-02-12 — Added Deep Work project endpoints:
+Updated: 2026-02-12 — Enriched project list/get responses with folder_path
+  and file_count for sidebar project browser.
+  Previous: Added Deep Work project endpoints:
   - POST /projects — create project
   - GET /projects — list projects (optional status filter)
   - GET /projects/{id} — get project + tasks + progress
@@ -682,6 +684,37 @@ async def mark_read(notification_id: str) -> SuccessResponse:
 
 
 # ============================================================================
+# Project Helpers
+# ============================================================================
+
+
+def _get_project_dir(project_id: str) -> Any:
+    """Get the project directory path."""
+    from pathlib import Path
+
+    return Path.home() / ".pocketclaw" / "projects" / project_id
+
+
+def _count_visible_files(directory: Any) -> int:
+    """Count non-hidden files in a directory (non-recursive)."""
+    from pathlib import Path
+
+    d = Path(directory)
+    if not d.exists() or not d.is_dir():
+        return 0
+    return sum(1 for f in d.iterdir() if not f.name.startswith("."))
+
+
+def _enrich_project_dict(project_dict: dict) -> dict:
+    """Add folder_path and file_count to a project dict."""
+    project_id = project_dict.get("id", "")
+    project_dir = _get_project_dir(project_id)
+    project_dict["folder_path"] = str(project_dir)
+    project_dict["file_count"] = _count_visible_files(project_dir)
+    return project_dict
+
+
+# ============================================================================
 # Project Endpoints (Deep Work)
 # ============================================================================
 
@@ -723,8 +756,10 @@ async def list_projects(status: str | None = None, limit: int = 100) -> dict[str
     manager = get_mission_control_manager()
     projects = await manager.list_projects(status)
 
+    enriched = [_enrich_project_dict(p.to_dict()) for p in projects[:limit]]
+
     return {
-        "projects": [p.to_dict() for p in projects[:limit]],
+        "projects": enriched,
         "count": len(projects),
     }
 
@@ -742,7 +777,7 @@ async def get_project(project_id: str) -> dict[str, Any]:
     progress = await manager.get_project_progress(project_id)
 
     return {
-        "project": project.to_dict(),
+        "project": _enrich_project_dict(project.to_dict()),
         "tasks": [t.to_dict() for t in tasks],
         "progress": progress,
     }

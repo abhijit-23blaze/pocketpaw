@@ -1,11 +1,11 @@
 """Mission Control manager.
 
 Created: 2026-02-05
-Updated: 2026-02-12 — Added skipped count to get_project_progress(), include
-  skipped in percent numerator. Added project CRUD methods for Deep Work:
-  - create_project, get_project, list_projects
-  - get_project_tasks, get_project_progress
-  - update_project, delete_project
+Updated: 2026-02-12 — Added project directory management:
+  - create_project() now creates ~/.pocketclaw/projects/{id}/ on disk
+  - delete_project() now removes the project directory via shutil.rmtree()
+  - Added ensure_project_directories() for startup migration
+  Previous: Added skipped count to get_project_progress(), project CRUD.
 
 High-level operations for Mission Control.
 
@@ -21,6 +21,8 @@ that combine storage operations with business logic:
 
 import logging
 import re
+import shutil
+from pathlib import Path
 from typing import Any
 
 from pocketclaw.mission_control.models import (
@@ -576,6 +578,10 @@ class MissionControlManager:
 
         await self._store.save_project(project)
 
+        # Create project directory on disk
+        project_dir = Path.home() / ".pocketclaw" / "projects" / project.id
+        project_dir.mkdir(parents=True, exist_ok=True)
+
         # Log activity (reuse TASK_CREATED for project creation)
         await self._log_activity(
             ActivityType.TASK_CREATED,
@@ -583,7 +589,7 @@ class MissionControlManager:
             message=f"Created project: {title}",
         )
 
-        logger.info(f"Created project: {title}")
+        logger.info(f"Created project: {title} (dir: {project_dir})")
         return project
 
     async def get_project(self, project_id: str) -> "Project | None":
@@ -654,6 +660,8 @@ class MissionControlManager:
     async def delete_project(self, project_id: str) -> bool:
         """Delete a project and all its tasks.
 
+        Also removes the project directory from disk.
+
         Args:
             project_id: Project to delete
 
@@ -665,7 +673,34 @@ class MissionControlManager:
         for task in tasks:
             await self._store.delete_task(task.id)
 
+        # Remove project directory from disk
+        project_dir = Path.home() / ".pocketclaw" / "projects" / project_id
+        if project_dir.exists():
+            shutil.rmtree(project_dir)
+            logger.info(f"Removed project directory: {project_dir}")
+
         return await self._store.delete_project(project_id)
+
+    async def ensure_project_directories(self) -> int:
+        """Create directories for existing projects that lack one.
+
+        Called at startup to migrate projects that existed before
+        directory management was added.
+
+        Returns:
+            Number of directories created
+        """
+        projects = await self._store.list_projects()
+        created = 0
+        for project in projects:
+            project_dir = Path.home() / ".pocketclaw" / "projects" / project.id
+            if not project_dir.exists():
+                project_dir.mkdir(parents=True, exist_ok=True)
+                created += 1
+                logger.info(f"Created missing project directory: {project_dir}")
+        if created:
+            logger.info(f"Created {created} missing project directories")
+        return created
 
     # =========================================================================
     # Activity & Notification Operations
