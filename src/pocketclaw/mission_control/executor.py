@@ -1,7 +1,10 @@
 """Mission Control Task Executor.
 
 Created: 2026-02-05
-Updated: 2026-02-05 - Added task output persistence (auto-save deliverables on completion)
+Updated: 2026-02-12 - Fixed execute_task_background self-defeating bug: removed
+  stale _running_tasks check from execute_task, added guard + cleanup wrapper
+  to execute_task_background to prevent zombie entries and 409 Conflicts.
+  Previous: 2026-02-05 - Added task output persistence (auto-save deliverables on completion)
 
 Enables execution of AI agents on tasks with real-time streaming via WebSocket.
 
@@ -131,10 +134,6 @@ class MCTaskExecutor:
         if not agent:
             return {"status": "error", "error": "Agent not found"}
 
-        # Check if task is already running
-        if task_id in self._running_tasks:
-            return {"status": "error", "error": "Task is already running"}
-
         # Security: Log task execution start
         logger.info(
             f"Task execution starting: task={task_id}, agent={agent_id}, "
@@ -144,7 +143,10 @@ class MCTaskExecutor:
         # Initialize stop flag
         self._stop_flags[task_id] = False
 
-        # Build agent settings with the agent's backend
+        # Build agent settings with the agent's backend.
+        # bypass_permissions is ALWAYS True for task execution because
+        # tasks run headlessly (no terminal for interactive prompts).
+        # The PreToolUse hook still blocks dangerous commands.
         base_settings = get_settings()
         agent_settings = Settings(
             agent_backend=agent.backend,
@@ -155,7 +157,7 @@ class MCTaskExecutor:
             ollama_host=base_settings.ollama_host,
             ollama_model=base_settings.ollama_model,
             llm_provider=base_settings.llm_provider,
-            bypass_permissions=base_settings.bypass_permissions,
+            bypass_permissions=True,
         )
 
         # Create dedicated router for this task
@@ -329,11 +331,27 @@ class MCTaskExecutor:
         Returns immediately. Task runs in a background asyncio task.
         Use stop_task() to cancel execution.
 
+        Guards against double-dispatch: if task_id is already tracked in
+        _running_tasks the call is silently skipped.  A cleanup wrapper
+        ensures the tracking entry is removed even when execute_task
+        returns early (e.g. validation failure), preventing zombie entries.
+
         Args:
             task_id: ID of the task to execute
             agent_id: ID of the agent to run
         """
-        async_task = asyncio.create_task(self.execute_task(task_id, agent_id))
+        if task_id in self._running_tasks:
+            logger.warning(f"Task {task_id} is already running, skipping duplicate dispatch")
+            return
+
+        async def _run_and_cleanup():
+            try:
+                return await self.execute_task(task_id, agent_id)
+            finally:
+                # Guarantee cleanup even if execute_task returns early
+                self._running_tasks.pop(task_id, None)
+
+        async_task = asyncio.create_task(_run_and_cleanup())
         self._running_tasks[task_id] = async_task
 
     async def stop_task(self, task_id: str) -> bool:

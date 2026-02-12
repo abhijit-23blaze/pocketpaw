@@ -15,6 +15,9 @@ Changes:
   - 2026-02-02: Fixed streaming - properly handle all SDK message types.
   - 2026-02-02: REWRITE - Use official claude-agent-sdk properly with all features.
                 Now uses real SDK imports (AssistantMessage, TextBlock, etc.)
+  - 2026-02-12: Hardened _block_dangerous_hook — wrapped in try/except to prevent
+                unhandled exceptions from tearing down the CLI stream. Updated hook
+                signature to match SDK 0.1.31 types (PreToolUseHookInput, HookContext).
 """
 
 import logging
@@ -305,45 +308,53 @@ class ClaudeAgentSDK:
                 return pattern
         return None
 
-    async def _block_dangerous_hook(
-        self, input_data: dict, tool_use_id: str, context: dict
-    ) -> dict:
+    async def _block_dangerous_hook(self, input_data, tool_use_id: str | None, context) -> dict:
         """PreToolUse hook to block dangerous commands.
 
         This hook is called before any Bash command is executed.
         Returns a deny decision for dangerous commands.
 
+        The callback must be resilient — an unhandled exception here
+        tears down the entire CLI stream.
+
         Args:
-            input_data: Contains tool_name and tool_input
-            tool_use_id: Unique ID for this tool use
-            context: Additional context from the SDK
+            input_data: PreToolUseHookInput (TypedDict with tool_name,
+                tool_input, tool_use_id, etc.)
+            tool_use_id: Match group or None
+            context: HookContext from the SDK
 
         Returns:
             Empty dict to allow, or deny decision dict to block
         """
-        tool_name = input_data.get("tool_name", "")
-        tool_input = input_data.get("tool_input", {})
+        try:
+            tool_name = input_data.get("tool_name", "")
+            tool_input = input_data.get("tool_input", {})
 
-        # Only check Bash commands
-        if tool_name != "Bash":
-            return {}
+            # Only check Bash commands
+            if tool_name != "Bash":
+                return {}
 
-        command = str(tool_input.get("command", ""))
+            command = str(tool_input.get("command", ""))
 
-        matched = self._is_dangerous_command(command)
-        if matched:
-            logger.warning(f"🛑 BLOCKED dangerous command: {command[:100]}")
-            logger.warning(f"   └─ Matched pattern: {matched}")
-            return {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": f"PocketPaw security: '{matched}' pattern is blocked",
+            matched = self._is_dangerous_command(command)
+            if matched:
+                logger.warning(f"🛑 BLOCKED dangerous command: {command[:100]}")
+                logger.warning(f"   └─ Matched pattern: {matched}")
+                return {
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "deny",
+                        "permissionDecisionReason": (
+                            f"PocketPaw security: '{matched}' pattern is blocked"
+                        ),
+                    }
                 }
-            }
 
-        logger.debug(f"✅ Allowed command: {command[:50]}...")
-        return {}
+            logger.debug(f"✅ Allowed command: {command[:50]}...")
+            return {}
+        except Exception as e:
+            logger.error(f"Hook callback error (allowing command): {e}")
+            return {}
 
     def _extract_text_from_message(self, message: Any) -> str:
         """Extract text content from an AssistantMessage.
